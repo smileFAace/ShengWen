@@ -656,6 +656,8 @@ class VideoDownloaderWorker(Worker):
                     logger.warning(f"[{self.name}] 无法从 yt-dlp 解析进度: '{p}' (原始值: '{raw_p}')")
 
         try:
+            # 重置缓存，确保重新检测 ffmpeg 路径（避免缓存无效的相对路径）
+            FFmpegHelper.reset_cache()
             # 配置 ffmpeg 路径（使用 FFmpegHelper）
             ffmpeg_location = FFmpegHelper.get_yt_dlp_ffmpeg_location()
             

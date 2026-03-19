@@ -23,6 +23,16 @@ class FFmpegHelper:
     _ffmpeg_dir: Optional[str] = None
     
     @classmethod
+    def reset_cache(cls) -> None:
+        """
+        重置 ffmpeg 路径缓存，下次调用 get_ffmpeg_path 时将重新检测。
+        
+        适用于 ffmpeg 安装状态可能在运行时发生变化的场景。
+        """
+        cls._ffmpeg_path = None
+        cls._ffmpeg_dir = None
+    
+    @classmethod
     def _ensure_ffmpeg_exe_name(cls, original_path: str) -> str:
         """
         确保 ffmpeg 可执行文件名为 ffmpeg.exe（或平台对应名称）。
@@ -89,7 +99,7 @@ class FFmpegHelper:
         否则尝试查找系统安装的 ffmpeg。
         
         返回:
-            ffmpeg 可执行文件的路径，如果未找到则返回 None。
+            ffmpeg 可执行文件的绝对路径，如果未找到则返回 None。
         """
         if cls._ffmpeg_path is not None:
             return cls._ffmpeg_path
@@ -98,6 +108,15 @@ class FFmpegHelper:
         try:
             from imageio_ffmpeg import get_ffmpeg_exe
             original_ffmpeg_path = get_ffmpeg_exe()
+            # imageio-ffmpeg 可能返回相对路径（如 "ffmpeg"），需要解析为绝对路径
+            if not os.path.isabs(original_ffmpeg_path):
+                resolved = shutil.which(original_ffmpeg_path)
+                if resolved:
+                    original_ffmpeg_path = resolved
+                    logger.info(f"[FFmpegHelper] imageio-ffmpeg 返回相对路径，已解析为: {original_ffmpeg_path}")
+                else:
+                    logger.warning(f"[FFmpegHelper] imageio-ffmpeg 返回 '{original_ffmpeg_path}' 但无法解析为绝对路径，回退到系统查找")
+                    raise FileNotFoundError("imageio-ffmpeg 返回的路径无法解析")
             # 确保文件名为标准名称
             cls._ffmpeg_path = cls._ensure_ffmpeg_exe_name(original_ffmpeg_path)
             cls._ffmpeg_dir = os.path.dirname(cls._ffmpeg_path)
@@ -106,6 +125,8 @@ class FFmpegHelper:
             return cls._ffmpeg_path
         except ImportError:
             logger.warning("[FFmpegHelper] imageio-ffmpeg 未安装，尝试使用系统 ffmpeg")
+        except (FileNotFoundError, Exception) as e:
+            logger.warning(f"[FFmpegHelper] imageio-ffmpeg 初始化失败: {e}，尝试使用系统 ffmpeg")
         
         # 如果 imageio-ffmpeg 不可用，尝试查找系统 ffmpeg
         system_ffmpeg = shutil.which("ffmpeg")
@@ -135,10 +156,22 @@ class FFmpegHelper:
         """
         获取用于 yt-dlp 的 ffmpeg_location 配置。
         
+        yt-dlp 的 ffmpeg_location 参数接受包含 ffmpeg 可执行文件的目录路径，
+        也可以是 ffmpeg 可执行文件的完整路径。为确保兼容性，返回目录路径。
+        
         返回:
-            ffmpeg 路径字符串，如果未找到则返回 None。
+            ffmpeg 所在目录路径字符串，如果未找到则返回 None。
         """
-        return cls.get_ffmpeg_path()
+        ffmpeg_path = cls.get_ffmpeg_path()
+        if ffmpeg_path:
+            ffmpeg_dir = os.path.dirname(ffmpeg_path)
+            # 如果 dirname 为空（不应该出现，因为 get_ffmpeg_path 已确保绝对路径），
+            # 回退返回完整路径
+            if ffmpeg_dir:
+                logger.info(f"[FFmpegHelper] yt-dlp ffmpeg_location: {ffmpeg_dir}")
+                return ffmpeg_dir
+            return ffmpeg_path
+        return None
     
     @classmethod
     def configure_ffmpeg_python(cls) -> bool:

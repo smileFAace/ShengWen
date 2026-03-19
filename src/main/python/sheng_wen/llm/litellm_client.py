@@ -136,12 +136,20 @@ class LiteLLMClient(LLM):
 
         for model_idx, model_name in enumerate(model_candidates):
             for opt_idx, (stream_opt, with_temperature) in enumerate(attempt_options):
+                # Ollama 等本地服务不需要 API Key，但 LiteLLM 要求 api_key 参数非空，
+                # 否则会抛出 AuthenticationError。对本地服务自动填充占位值。
+                effective_api_key = self.config.api_key
+                if not effective_api_key or not effective_api_key.strip():
+                    provider = (self.config.provider or "").strip().lower()
+                    if provider in ("ollama",):
+                        effective_api_key = "ollama"  # 占位值，Ollama 不校验
+
                 kwargs = {
                     "model": model_name,
                     "messages": message_dicts,
                     "stream": stream_opt,
                     "timeout": timeout,
-                    "api_key": self.config.api_key,
+                    "api_key": effective_api_key,
                     "base_url": self._request_base_url(),
                     "drop_params": True,
                 }
