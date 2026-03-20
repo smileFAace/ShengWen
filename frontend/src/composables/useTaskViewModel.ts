@@ -4,6 +4,7 @@ import type {
   Task,
   CreateTaskRequest,
   SummaryMode,
+  VideoQuality,
   LLMProvider,
   LLMSettings,
   UpdateLLMSettingsRequest,
@@ -136,7 +137,7 @@ export function useTaskViewModel() {
   const videoUrl = ref('')
   const selectedFile = ref<File | null>(null)
   const localFilePath = ref('')
-  const quality = ref('audio_only')
+  const quality = ref<VideoQuality>('audio_only')
   const summaryMode = ref<Exclude<SummaryMode, 'auto'>>('standard')
   const isSubmitting = ref(false)
   const error = ref<string | null>(null)
