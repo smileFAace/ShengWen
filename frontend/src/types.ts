@@ -11,6 +11,15 @@ export const TaskStatus = {
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 export type SummaryMode = 'standard' | 'agent' | 'auto';
 
+/**
+ * 视频下载画质选项
+ * - lowest: 最低画质（默认推荐，省内存省带宽，转录只需音频）
+ * - medium: 中等画质（720p 以下）
+ * - highest: 最高画质
+ * - audio_only: 仅音频（不保留视频流，某些平台可能不支持）
+ */
+export type VideoQuality = 'lowest' | 'medium' | 'highest' | 'audio_only';
+
 export interface Task {
   id: string;
   video_url: string;
@@ -35,7 +44,7 @@ export interface Task {
 
 export interface CreateTaskRequest {
   video_url: string;
-  quality: string;
+  quality: VideoQuality;
   summary_mode?: Exclude<SummaryMode, 'auto'> | SummaryMode;
 }
 
