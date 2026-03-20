@@ -27,6 +27,7 @@ import {
   TaskStatus,
   type Task,
   type SummaryMode,
+  type VideoQuality,
   type LLMProvider,
   type LLMSettings,
   type TranscriptionSettings,
@@ -37,7 +38,7 @@ import ThemeSelector from './ThemeSelector.vue'
 const videoUrl = defineModel<string>('videoUrl', { required: true })
 const selectedFile = defineModel<File | null>('selectedFile', { default: null })
 const localFilePath = defineModel<string>('localFilePath', { default: '' })
-// const quality = defineModel<string>('quality', { required: true })
+const quality = defineModel<VideoQuality>('quality', { default: 'lowest' })
 const summaryMode = defineModel<Exclude<SummaryMode, 'auto'>>('summaryMode', { default: 'standard' })
 const isSidebarOpen = defineModel<boolean>('isSidebarOpen', { required: true })
 
@@ -160,6 +161,18 @@ type SearchMatchSource = 'topic' | 'summary'
 const triggerFileUpload = () => {
   fileInput.value?.click()
 }
+
+// 画质选项配置
+const qualityOptions: { value: VideoQuality; label: string; desc: string }[] = [
+  { value: 'lowest', label: '最低画质', desc: '推荐 · 省内存省带宽' },
+  { value: 'medium', label: '中等画质', desc: '720p 以下' },
+  { value: 'highest', label: '最高画质', desc: '注意内存占用' },
+  { value: 'audio_only', label: '仅音频', desc: '不保留视频流' },
+]
+const isQualityDropdownOpen = ref(false)
+const selectedQualityLabel = computed(() =>
+  qualityOptions.find(o => o.value === quality.value)?.label ?? '最低画质'
+)
 
 const switchSummaryMode = (mode: Exclude<SummaryMode, 'auto'>) => {
   summaryMode.value = mode
@@ -1219,6 +1232,56 @@ watch(() => props.summarizationSettings, (settings) => {
                     <span>Agent 模式</span>
                   </button>
                 </div>
+              </div>
+
+              <!-- 画质选择 -->
+              <div class="relative">
+                <!-- 点击外部关闭下拉框的透明遮罩 -->
+                <div
+                  v-if="isQualityDropdownOpen"
+                  class="fixed inset-0 z-10"
+                  @click="isQualityDropdownOpen = false"
+                ></div>
+                <button
+                  type="button"
+                  @click="isQualityDropdownOpen = !isQualityDropdownOpen"
+                  class="relative z-20 w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl text-xs transition-colors"
+                >
+                  <span class="text-slate-500">画质：</span>
+                  <span class="font-medium text-slate-700">{{ selectedQualityLabel }}</span>
+                  <svg
+                    class="w-3.5 h-3.5 text-slate-400 transition-transform duration-200"
+                    :class="isQualityDropdownOpen ? 'rotate-180' : ''"
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                <transition
+                  enter-active-class="transition ease-out duration-100"
+                  enter-from-class="opacity-0 scale-95 -translate-y-1"
+                  enter-to-class="opacity-100 scale-100 translate-y-0"
+                  leave-active-class="transition ease-in duration-75"
+                  leave-from-class="opacity-100 scale-100 translate-y-0"
+                  leave-to-class="opacity-0 scale-95 -translate-y-1"
+                >
+                  <div
+                    v-if="isQualityDropdownOpen"
+                    class="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden"
+                  >
+                    <button
+                      v-for="opt in qualityOptions"
+                      :key="opt.value"
+                      type="button"
+                      @click="quality = opt.value; isQualityDropdownOpen = false"
+                      class="w-full flex items-center justify-between px-3 py-2 text-xs hover:bg-blue-50 transition-colors"
+                      :class="quality === opt.value ? 'bg-blue-50 text-primary font-medium' : 'text-slate-600'"
+                    >
+                      <span>{{ opt.label }}</span>
+                      <span class="text-[10px] text-slate-400">{{ opt.desc }}</span>
+                    </button>
+                  </div>
+                </transition>
               </div>
 
               <button

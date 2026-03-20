@@ -40,6 +40,15 @@ class VideoDownloaderWorker(Worker):
         return "bilibili.com" in netloc or "b23.tv" in netloc
 
     @staticmethod
+    def _is_youtube_url(video_url: str) -> bool:
+        """判断是否为 YouTube 链接（含 youtu.be 短链）。"""
+        try:
+            netloc = (urlparse(video_url).netloc or "").lower()
+        except Exception:
+            return False
+        return any(domain in netloc for domain in ("youtube.com", "youtu.be", "youtube-nocookie.com"))
+
+    @staticmethod
     def _format_duration(seconds: float) -> str:
         """将秒数格式化为 HHMMSS 字符串。"""
         hours = int(seconds // 3600)
@@ -656,13 +665,39 @@ class VideoDownloaderWorker(Worker):
                     logger.warning(f"[{self.name}] 无法从 yt-dlp 解析进度: '{p}' (原始值: '{raw_p}')")
 
         try:
+            # 重置缓存，确保重新检测 ffmpeg 路径（避免缓存无效的相对路径）
+            FFmpegHelper.reset_cache()
             # 配置 ffmpeg 路径（使用 FFmpegHelper）
             ffmpeg_location = FFmpegHelper.get_yt_dlp_ffmpeg_location()
-            
+
+            # 根据 quality 参数构建 yt-dlp format 字符串
+            # 设计决策：
+            # - lowest（默认）：最低画质视频 + 最佳音频，适合转录场景，省内存省带宽
+            # - medium：720p 以下中等画质 + 最佳音频
+            # - highest：最高画质 + 最佳音频（注意：高分辨率视频合并时内存占用大）
+            # - audio_only：与 lowest 格式相同（yt-dlp 不支持纯音频流时仍需最低画质视频）
+            format_map = {
+                'lowest': 'worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/worst[ext=mp4]/best',
+                'medium': (
+                    'bestvideo[height<=720][vcodec^=avc]+bestaudio[acodec^=mp4a]'
+                    '/bestvideo[height<=720]+bestaudio'
+                    '/best[height<=720]'
+                    '/worst[ext=mp4]/best'
+                ),
+                'highest': (
+                    'bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]'
+                    '/bestvideo+bestaudio'
+                    '/best'
+                ),
+                'audio_only': 'worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/worst[ext=mp4]/best',
+            }
+            # 兜底：未知 quality 值使用 lowest 策略
+            chosen_format = format_map.get(quality, format_map['lowest'])
+
             if quality == "audio_only":
                 ydl_opts = {
                     'outtmpl': os.path.join(self.output_dir, '%(id)s.%(ext)s'),
-                    'format': 'worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/worst[ext=mp4]/best',
+                    'format': chosen_format,
                     'progress_hooks': [progress_hook],
                     'writethumbnail': False,
                     'writesubtitles': False,
@@ -670,7 +705,7 @@ class VideoDownloaderWorker(Worker):
             else:
                 ydl_opts = {
                     'outtmpl': os.path.join(self.output_dir, '%(id)s.%(ext)s'),
-                    'format': 'worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/worst[ext=mp4]/best',
+                    'format': chosen_format,
                     'merge_output_format': 'mp4',
                     'progress_hooks': [progress_hook],
                 }
@@ -678,6 +713,80 @@ class VideoDownloaderWorker(Worker):
             # 如果有 ffmpeg 路径，添加到配置中
             if ffmpeg_location:
                 ydl_opts['ffmpeg_location'] = ffmpeg_location
+
+            # YouTube 反爬机制要求登录态，自动从浏览器读取 cookies 绕过验证。
+            # yt-dlp 会按浏览器名称查找本地 cookie 存储，不需要浏览器正在运行。
+            if self._is_youtube_url(video_url):
+                ydl_opts['cookiesfrombrowser'] = ('chrome',)
+                # 指定 Node.js 作为 JS 运行时，用于解决 YouTube 的 n parameter challenge。
+                # 不解决此挑战会导致大部分 HTTPS 直连格式不可用，只剩 HLS (m3u8) 格式。
+                # 需要系统已安装 Node.js，并且 pip install "yt-dlp[default]" 安装了 yt-dlp-ejs。
+                import shutil
+                if shutil.which('node'):
+                    ydl_opts['js_runtimes'] = {'node': {}}
+                    logger.info(f"[{self.name}] 检测到 Node.js，将使用 node 作为 JS 运行时解决 YouTube 挑战")
+                # YouTube 的 HLS (m3u8) 分片模式在代理/网络不稳定时容易出现
+                # "fragment not found" 错误。覆盖通用 format，加入 protocol!=m3u8 排除 HLS 流。
+                yt_format_map = {
+                    'lowest': (
+                        'worstvideo[vcodec^=avc][protocol!*=m3u8]+bestaudio[acodec^=mp4a][protocol!*=m3u8]'
+                        '/worstvideo[protocol!*=m3u8]+bestaudio[protocol!*=m3u8]'
+                        '/worst[protocol!*=m3u8]'
+                        '/worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]'
+                        '/worst[ext=mp4]/best'
+                    ),
+                    'medium': (
+                        'bestvideo[height<=720][vcodec^=avc][protocol!*=m3u8]+bestaudio[acodec^=mp4a][protocol!*=m3u8]'
+                        '/bestvideo[height<=720][protocol!*=m3u8]+bestaudio[protocol!*=m3u8]'
+                        '/best[height<=720][protocol!*=m3u8]'
+                        '/bestvideo[height<=720][vcodec^=avc]+bestaudio[acodec^=mp4a]'
+                        '/best[height<=720]/best'
+                    ),
+                    'highest': (
+                        'bestvideo[vcodec^=avc][protocol!*=m3u8]+bestaudio[acodec^=mp4a][protocol!*=m3u8]'
+                        '/bestvideo[protocol!*=m3u8]+bestaudio[protocol!*=m3u8]'
+                        '/best[protocol!*=m3u8]'
+                        '/bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]'
+                        '/best'
+                    ),
+                    'audio_only': (
+                        'worstvideo[vcodec^=avc][protocol!*=m3u8]+bestaudio[acodec^=mp4a][protocol!*=m3u8]'
+                        '/worstvideo[protocol!*=m3u8]+bestaudio[protocol!*=m3u8]'
+                        '/worst[protocol!*=m3u8]'
+                        '/worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]'
+                        '/worst[ext=mp4]/best'
+                    ),
+                }
+                ydl_opts['format'] = yt_format_map.get(quality, yt_format_map['lowest'])
+                # HLS 分片下载的容错和重试配置（兜底时 HLS 仍可能被选中）
+                ydl_opts['fragment_retries'] = 10
+                ydl_opts['retries'] = 5
+                ydl_opts['skip_unavailable_fragments'] = False
+                logger.info(f"[{self.name}] 检测到 YouTube 链接，将从 Chrome 读取 cookies 并优先使用 HTTPS 直连格式下载")
+
+            # B 站反爬机制：HTTP 412 Precondition Failed
+            # B 站对未携带有效 Cookie 的请求会返回 412，需要注入 SESSDATA 来绕过。
+            # 通过 yt-dlp 的 http_headers 注入 Cookie（比 cookiejar 文件更简洁）。
+            if self._is_bilibili_url(video_url):
+                sessdata, cookie_source = self._resolve_bilibili_sessdata(payload)
+                if sessdata:
+                    # 将 SESSDATA 注入到 HTTP 请求头的 Cookie 字段
+                    existing_headers = ydl_opts.get('http_headers', {})
+                    existing_headers['Cookie'] = f'SESSDATA={sessdata}'
+                    existing_headers['Referer'] = 'https://www.bilibili.com/'
+                    ydl_opts['http_headers'] = existing_headers
+                    logger.info(
+                        f"[{self.name}] 检测到 B 站链接，已注入 SESSDATA Cookie "
+                        f"(来源: {cookie_source})"
+                    )
+                else:
+                    # 没有 SESSDATA 时，尝试从浏览器读取 Cookie 作为兜底
+                    # 注意：macOS 上可能需要 Keychain 授权弹窗
+                    ydl_opts['cookiesfrombrowser'] = ('chrome',)
+                    logger.warning(
+                        f"[{self.name}] 检测到 B 站链接但未配置 SESSDATA，"
+                        f"将尝试从 Chrome 读取 cookies（可能触发系统授权弹窗）"
+                    )
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info_dict = ydl.extract_info(video_url, download=True)

@@ -97,7 +97,7 @@ if os.path.exists(dist_dir):
 
 class TaskCreate(BaseModel):
     video_url: HttpUrl
-    quality: Optional[str] = "best" # "best", "audio_only"
+    quality: Optional[str] = "lowest"  # "lowest", "medium", "highest", "audio_only"
     summary_mode: Optional[str] = Field(
         default=None,
         description="总结模式: standard | agent | auto（前端建议仅 standard/agent）",
@@ -257,7 +257,7 @@ class BilibiliPartsConfig(BaseModel):
 
 class TaskCreate(BaseModel):
     video_url: HttpUrl
-    quality: Optional[str] = "best" # "best", "audio_only"
+    quality: Optional[str] = "lowest"  # "lowest", "medium", "highest", "audio_only"
     summary_mode: Optional[str] = Field(
         default=None,
         description="总结模式: standard | agent | auto（前端建议仅 standard/agent）",

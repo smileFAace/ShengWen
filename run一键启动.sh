@@ -92,10 +92,83 @@ if [[ -z "$PYTHON_CMD" ]]; then
   exit 1
 fi
 
-if [[ ! -d "frontend/dist" ]]; then
-  echo "[ERROR] 未找到前端构建目录 frontend/dist。"
-  echo "[ERROR] 请先执行 ./deploy一键部署.sh 或手动运行 frontend/npm run build。"
-  exit 1
-fi
+# ---------- 前端自动构建 ----------
+# 检测前端源码是否比 dist/ 更新，如果有变化则自动 rebuild
+frontend_needs_build() {
+  # 如果 dist 目录不存在，肯定需要构建
+  if [[ ! -d "frontend/dist" ]]; then
+    return 0
+  fi
+
+  # 找到 dist 目录中最新的文件时间戳（作为上次构建的时间基准）
+  local dist_latest
+  dist_latest="$(find frontend/dist -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)"
+
+  # macOS 的 find 不支持 -printf，用 stat 兜底
+  if [[ -z "$dist_latest" ]]; then
+    dist_latest="$(find frontend/dist -type f -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)"
+  fi
+
+  if [[ -z "$dist_latest" ]]; then
+    return 0
+  fi
+
+  # 检查 src/ 和关键配置文件是否有比 dist 更新的文件
+  local src_latest
+  src_latest="$(find frontend/src frontend/index.html frontend/package.json frontend/tsconfig.json frontend/vite.config.ts -type f -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)"
+
+  if [[ -z "$src_latest" ]]; then
+    # 如果拿不到源码时间戳，保守地跳过构建
+    return 1
+  fi
+
+  # 比较：源码最新时间 > dist 最新时间 → 需要重建（整数秒比较）
+  if [[ "$src_latest" -gt "$dist_latest" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+auto_build_frontend() {
+  if ! frontend_needs_build; then
+    echo "[INFO] 前端已是最新，跳过构建。"
+    return 0
+  fi
+
+  echo "[INFO] 检测到前端源码有更新，自动重新构建..."
+
+  # 检查 node 和 npm 是否可用
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "[WARN] 未找到 node/npm，无法自动构建前端。"
+    echo "[WARN] 请手动执行: cd frontend && npm run build"
+    if [[ ! -d "frontend/dist" ]]; then
+      echo "[ERROR] 且 frontend/dist 不存在，无法启动。"
+      exit 1
+    fi
+    return 0
+  fi
+
+  # 检查 node_modules 是否存在
+  if [[ ! -d "frontend/node_modules" ]]; then
+    echo "[INFO] 未找到 frontend/node_modules，先安装依赖..."
+    (cd frontend && npm install --no-audit --fund=false)
+  fi
+
+  # 执行构建
+  if (cd frontend && npm run build); then
+    echo "[INFO] ✅ 前端构建成功！"
+  else
+    echo "[WARN] ⚠️ 前端构建失败。"
+    if [[ -d "frontend/dist" ]]; then
+      echo "[WARN] 将使用上一次的构建产物继续启动。"
+    else
+      echo "[ERROR] 且 frontend/dist 不存在，无法启动。"
+      exit 1
+    fi
+  fi
+}
+
+auto_build_frontend
 
 exec "$PYTHON_CMD" ShengWen-app.py
