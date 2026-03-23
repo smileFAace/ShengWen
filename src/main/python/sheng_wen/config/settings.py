@@ -149,7 +149,7 @@ class SummarizationConfig:
     chunk_debug_dump_dir: str = "temp/chunk_debug"
     enable_agent_pipeline: bool = False
     transcript_chunk_emit_duration_sec: int = 600
-    enable_summarization: bool = True
+    enable_summarization: bool = False
 
     def __post_init__(self):
         normalized_mode = (self.mode or "auto").lower()

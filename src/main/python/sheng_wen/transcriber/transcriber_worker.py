@@ -326,7 +326,7 @@ class TranscriberWorker(Worker):
                 transcript_dir = "temp"
             os.makedirs(transcript_dir, exist_ok=True)
             base_name = os.path.splitext(os.path.basename(output_file))[0]
-            intermediate_file_path = os.path.join(transcript_dir, f"{base_name}.txt")
+            intermediate_file_path = os.path.join(transcript_dir, f"{base_name}.md")
             self._save_transcription_to_file(result, intermediate_file_path)
 
             if task_id:
@@ -365,7 +365,7 @@ class TranscriberWorker(Worker):
 
             # 检查是否启用 AI 总结
             from ..config.settings import config
-            enable_summarization = bool(getattr(config.summarization, "enable_summarization", True))
+            enable_summarization = bool(getattr(config.summarization, "enable_summarization", False))
 
             if enable_summarization and self._next_worker:
                 self._submit_coro(self._next_worker.add_task(next_payload))

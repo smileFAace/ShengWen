@@ -47,7 +47,7 @@ class VideoDownloaderWorker(Worker):
         # 媒体文件（mp4/mp3）下载到 temp 临时目录
         self.output_dir = "temp"
         os.makedirs(self.output_dir, exist_ok=True)
-        # 纯文本转录文件（.txt 字幕）保存到用户配置的 transcript_dir
+        # 转录文件（.md 字幕）保存到用户配置的 transcript_dir
         self.transcript_output_dir = self._get_output_dir("transcript_dir", "temp")
         os.makedirs(self.transcript_output_dir, exist_ok=True)
 
@@ -196,7 +196,7 @@ class VideoDownloaderWorker(Worker):
             True 表示启用总结，False 表示跳过总结
         """
         from ..config.settings import config
-        return bool(getattr(config.summarization, "enable_summarization", True))
+        return bool(getattr(config.summarization, "enable_summarization", False))
 
     @staticmethod
     def _get_output_dir(config_key: str, default: str = "temp") -> str:

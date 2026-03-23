@@ -1073,7 +1073,7 @@ async def re_summarize_task(task_id: str, payload: ReSummarizeRequest | None = N
         },
     )
 
-    temp_file = os.path.join("temp", f"{task_id}_re.txt")
+    temp_file = os.path.join("temp", f"{task_id}_re.md")
     os.makedirs("temp", exist_ok=True)
     with open(temp_file, "w", encoding="utf-8") as f:
         f.write(task["transcript"])
@@ -1535,7 +1535,7 @@ async def get_summarization_settings():
         llm_call_retry_max=int(cfg.llm_call_retry_max),
         max_agent_value_chars=int(cfg.max_agent_value_chars),
         fallback_to_standard_on_agent_error=bool(cfg.fallback_to_standard_on_agent_error),
-        enable_summarization=bool(getattr(cfg, "enable_summarization", True)),
+        enable_summarization=bool(getattr(cfg, "enable_summarization", False)),
         transcript_dir=transcript_dir,
         summary_dir=summary_dir,
     )

@@ -325,7 +325,7 @@ export function useTaskViewModel() {
       filename = `AI总结-${topic}.md`
     } else {
       content = selectedTask.value.transcript || ''
-      filename = `视频转录-${topic}.txt`
+      filename = `视频转录-${topic}.md`
     }
     
     const blob = new Blob([content], { type: 'text/plain' })

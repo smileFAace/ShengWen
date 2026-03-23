@@ -155,7 +155,7 @@ watch(() => props.summarizationSettings, (settings) => {
     fallbackToStandardOnAgentError.value = settings.fallback_to_standard_on_agent_error
     transcriptDir.value = settings.transcript_dir || 'temp'
     summaryDir.value = settings.summary_dir || 'temp'
-    enableSummarization.value = settings.enable_summarization ?? true
+    enableSummarization.value = settings.enable_summarization ?? false
   }
 }, { immediate: true })
 
