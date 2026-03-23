@@ -319,7 +319,14 @@ class TranscriberWorker(Worker):
             logger.info(f"[{self.name}] 实时率 (RTF): {result.real_time_factor:.2f}")
             logger.info(f"[{self.name}] 检测到的语言: {result.language} (置信度: {result.language_probability:.2f})")
 
-            intermediate_file_path = os.path.splitext(output_file)[0] + ".txt"
+            # 将转录文本保存到 transcript_dir（用户配置的字幕输出目录）
+            from ..config.settings import config
+            transcript_dir = getattr(config.output, "transcript_dir", None) if hasattr(config, "output") else None
+            if not transcript_dir:
+                transcript_dir = "temp"
+            os.makedirs(transcript_dir, exist_ok=True)
+            base_name = os.path.splitext(os.path.basename(output_file))[0]
+            intermediate_file_path = os.path.join(transcript_dir, f"{base_name}.txt")
             self._save_transcription_to_file(result, intermediate_file_path)
 
             if task_id:

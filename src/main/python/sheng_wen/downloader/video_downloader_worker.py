@@ -44,9 +44,12 @@ class VideoDownloaderWorker(Worker):
         self.next_worker = next_worker
         self.summary_worker = summary_worker
         self.transcription_settings_manager = transcription_settings_manager
-        # 从配置读取输出目录
-        self.output_dir = self._get_output_dir("transcript_dir", "temp")
+        # 媒体文件（mp4/mp3）下载到 temp 临时目录
+        self.output_dir = "temp"
         os.makedirs(self.output_dir, exist_ok=True)
+        # 纯文本转录文件（.txt 字幕）保存到用户配置的 transcript_dir
+        self.transcript_output_dir = self._get_output_dir("transcript_dir", "temp")
+        os.makedirs(self.transcript_output_dir, exist_ok=True)
 
     @staticmethod
     def _is_bilibili_url(video_url: str) -> bool:
@@ -799,7 +802,7 @@ class VideoDownloaderWorker(Worker):
                 return False
 
             transcript = subtitle_result["transcript"]
-            intermediate_file_path = os.path.join(self.output_dir, f"{task_id}_subtitle.txt")
+            intermediate_file_path = os.path.join(self.transcript_output_dir, f"{task_id}_subtitle.txt")
             # summary_dir 从配置获取，用于保存 AI 总结文件
             summary_dir = self._get_output_dir("summary_dir", "temp")
             output_file = os.path.join(summary_dir, f"{task_id}_summary.md")
@@ -898,7 +901,7 @@ class VideoDownloaderWorker(Worker):
             else:
                 title_suffix = f" (已合并 {len(part_indices)} 个分P)"
 
-            intermediate_file_path = os.path.join(self.output_dir, f"{task_id}_subtitle.txt")
+            intermediate_file_path = os.path.join(self.transcript_output_dir, f"{task_id}_subtitle.txt")
             summary_dir = self._get_output_dir("summary_dir", "temp")
             output_file = os.path.join(summary_dir, f"{task_id}_summary.md")
 
@@ -1054,7 +1057,8 @@ class VideoDownloaderWorker(Worker):
             # - lowest（默认）：最低画质视频 + 最佳音频，适合转录场景，省内存省带宽
             # - medium：720p 以下中等画质 + 最佳音频
             # - highest：最高画质 + 最佳音频（注意：高分辨率视频合并时内存占用大）
-            # - audio_only：与 lowest 格式相同（yt-dlp 不支持纯音频流时仍需最低画质视频）
+            # - audio_only：真正的纯音频下载，优先 m4a/aac 格式，不包含视频流
+            #   兜底链：如果平台不支持纯音频流，则回退到最低画质视频+音频
             format_map = {
                 'lowest': 'worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/worst[ext=mp4]/best',
                 'medium': (
@@ -1068,7 +1072,10 @@ class VideoDownloaderWorker(Worker):
                     '/bestvideo+bestaudio'
                     '/best'
                 ),
-                'audio_only': 'worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/worst[ext=mp4]/best',
+                'audio_only': (
+                    'bestaudio[acodec^=mp4a]/bestaudio'
+                    '/worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/worst[ext=mp4]/best'
+                ),
             }
             # 兜底：未知 quality 值使用 lowest 策略
             chosen_format = format_map.get(quality, format_map['lowest'])
@@ -1129,10 +1136,10 @@ class VideoDownloaderWorker(Worker):
                         '/best'
                     ),
                     'audio_only': (
-                        'worstvideo[vcodec^=avc][protocol!*=m3u8]+bestaudio[acodec^=mp4a][protocol!*=m3u8]'
-                        '/worstvideo[protocol!*=m3u8]+bestaudio[protocol!*=m3u8]'
+                        'bestaudio[acodec^=mp4a][protocol!*=m3u8]/bestaudio[protocol!*=m3u8]'
+                        '/bestaudio[acodec^=mp4a]/bestaudio'
+                        '/worstvideo[vcodec^=avc][protocol!*=m3u8]+bestaudio[acodec^=mp4a][protocol!*=m3u8]'
                         '/worst[protocol!*=m3u8]'
-                        '/worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]'
                         '/worst[ext=mp4]/best'
                     ),
                 }
