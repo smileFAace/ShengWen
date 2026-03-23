@@ -9,6 +9,7 @@ import {
   PhBrain,
   PhMicrophone,
   PhGitBranch,
+  PhFolderOpen,
 } from '@phosphor-icons/vue'
 import type { LLMProvider, LLMSettings, TranscriptionSettings, SummarizationSettings } from '../types'
 
@@ -61,6 +62,8 @@ const emit = defineEmits<{
     auto_chunk_min_transcript_lines?: number
     max_agent_value_chars?: number
     fallback_to_standard_on_agent_error?: boolean
+    transcript_dir?: string
+    summary_dir?: string
   }]
 }>()
 
@@ -90,6 +93,10 @@ const autoChunkMinAudioDurationSec = ref(40)
 const autoChunkMinTranscriptLines = ref(1800)
 const maxAgentValueChars = ref(500)
 const fallbackToStandardOnAgentError = ref(true)
+
+// 输出目录设置
+const transcriptDir = ref('temp')
+const summaryDir = ref('temp')
 
 const secondsToMinutes = (seconds: number) => {
   return Math.round((Number(seconds || 0) / 60) * 10) / 10
@@ -142,6 +149,8 @@ watch(() => props.summarizationSettings, (settings) => {
     autoChunkMinTranscriptLines.value = settings.auto_chunk_min_transcript_lines
     maxAgentValueChars.value = settings.max_agent_value_chars
     fallbackToStandardOnAgentError.value = settings.fallback_to_standard_on_agent_error
+    transcriptDir.value = settings.transcript_dir || 'temp'
+    summaryDir.value = settings.summary_dir || 'temp'
   }
 }, { immediate: true })
 
@@ -244,6 +253,8 @@ const handleSaveSummarizationSettings = () => {
     auto_chunk_min_transcript_lines: autoChunkMinTranscriptLines.value,
     max_agent_value_chars: Math.max(100, Number(maxAgentValueChars.value || 0)),
     fallback_to_standard_on_agent_error: fallbackToStandardOnAgentError.value,
+    transcript_dir: transcriptDir.value.trim() || 'temp',
+    summary_dir: summaryDir.value.trim() || 'temp',
   })
 }
 </script>
@@ -796,6 +807,37 @@ const handleSaveSummarizationSettings = () => {
                     ]"
                   ></span>
                 </button>
+              </div>
+            </div>
+
+            <!-- 输出目录 -->
+            <div class="rounded-xl border border-slate-200 bg-white p-4 space-y-4">
+              <div class="flex items-center gap-2 pb-2 border-b border-slate-100">
+                <PhFolderOpen :size="18" class="text-blue-500" />
+                <h3 class="text-sm font-semibold text-slate-800">输出目录</h3>
+              </div>
+              <p class="text-xs text-slate-500">设置转录文件和总结文件的保存目录，支持相对路径（基于项目根目录）或绝对路径。</p>
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-xs text-slate-600 mb-1.5">转录文件保存目录</label>
+                  <input
+                    v-model="transcriptDir"
+                    type="text"
+                    placeholder="例如: temp 或 /absolute/path/to/transcripts"
+                    class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono"
+                  >
+                  <p class="text-xs text-slate-400 mt-1">转录文本（字幕原文）的保存位置，默认为 temp</p>
+                </div>
+                <div>
+                  <label class="block text-xs text-slate-600 mb-1.5">总结文件保存目录</label>
+                  <input
+                    v-model="summaryDir"
+                    type="text"
+                    placeholder="例如: temp 或 /absolute/path/to/summaries"
+                    class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono"
+                  >
+                  <p class="text-xs text-slate-400 mt-1">AI 总结文章的保存位置，默认为 temp</p>
+                </div>
               </div>
             </div>
 
