@@ -13,8 +13,10 @@
     "model_size": "tiny",
     "device": "cpu",
     "enable_bilibili_subtitle_fetch": true,
+    "enable_youtube_subtitle_fetch": true,
     "bilibili_sessdata": "",
-    "faster_whisper_model_path": null
+    "faster_whisper_model_path": null,
+    "convert_traditional_to_simplified": true
   },
   "llm": {
     "provider": "openai_compatible",
@@ -51,6 +53,11 @@
     "chunk_debug_dump_enabled": false,
     "chunk_debug_dump_dir": "temp/chunk_debug",
     "enable_agent_pipeline": false,
-    "transcript_chunk_emit_duration_sec": 600
+    "transcript_chunk_emit_duration_sec": 600,
+    "enable_summarization": true
+  },
+  "output": {
+    "transcript_dir": "temp",
+    "summary_dir": "temp"
   }
 }

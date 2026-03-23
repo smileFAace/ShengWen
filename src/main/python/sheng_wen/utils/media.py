@@ -29,9 +29,12 @@ def build_transcriber_payload(
             f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(sorted(SUPPORTED_MEDIA_EXTENSIONS))}"
         )
 
+    # 从配置获取总结文件保存目录
+    summary_dir = _get_output_dir("summary_dir", output_dir)
+
     payload = {
         "task_id": task_id,
-        "output_file": os.path.join(output_dir, f"{task_id}_summary.md"),
+        "output_file": os.path.join(summary_dir, f"{task_id}_summary.md"),
     }
     if summary_mode:
         payload["summary_mode"] = str(summary_mode)
@@ -45,3 +48,27 @@ def build_transcriber_payload(
         payload["audio_file"] = os.path.join(output_dir, f"{task_id}.mp3")
 
     return payload
+
+
+def _get_output_dir(config_key: str, default: str = "temp") -> str:
+    """
+    从配置获取输出目录，如果未配置则使用默认值。
+
+    Args:
+        config_key: 配置键名 (transcript_dir 或 summary_dir)
+        default: 默认目录
+
+    Returns:
+        输出目录路径
+    """
+    try:
+        from .config.settings import config
+        output_dir = getattr(config.output, config_key, None) if hasattr(config, "output") else None
+        if not output_dir:
+            output_dir = default
+        # 确保目录存在
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+    except Exception:
+        # 如果配置读取失败，返回默认值
+        return default

@@ -355,8 +355,28 @@ class TranscriberWorker(Worker):
                 "intermediate_file_path": intermediate_file_path,
                 **payload
             }
-            
-            self._submit_coro(self._next_worker.add_task(next_payload))
+
+            # 检查是否启用 AI 总结
+            from ..config.settings import config
+            enable_summarization = bool(getattr(config.summarization, "enable_summarization", True))
+
+            if enable_summarization and self._next_worker:
+                self._submit_coro(self._next_worker.add_task(next_payload))
+            else:
+                # 跳过 AI 总结，直接标记任务完成
+                if task_id:
+                    from ..db import TaskStatus
+                    from ..task_updater import update_and_notify
+                    update_data = {
+                        "status": TaskStatus.COMPLETED,
+                        "progress": 100,
+                        "summary": None,  # 无 AI 总结
+                        "summary_mode": "disabled",  # 标记为禁用
+                    }
+                    self._submit_coro(update_and_notify(task_id, update_data))
+                    logger.info(
+                        f"[{self.name}] 任务 {task_id} 已完成转录，跳过 AI 总结（已禁用）"
+                    )
 
         except (TaskCancelledError, TranscriptionCancelled):
             logger.info(f"[{self.name}] 任务已取消，停止后续转录流程: {task_id}")

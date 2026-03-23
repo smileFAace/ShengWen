@@ -266,6 +266,7 @@ class TranscriptionSettingsManager:
         model_source: str = "auto_download",
         model_path: str | None = None,
         initial_enable_bilibili_subtitle_fetch: bool = True,
+        initial_enable_youtube_subtitle_fetch: bool = True,
         initial_bilibili_sessdata: str = "",
     ):
         self._lock = Lock()
@@ -277,6 +278,7 @@ class TranscriptionSettingsManager:
             # 兼容旧配置：曾填写过 model_path 时默认沿用手动模式。
             self._model_source = "manual_path"
         self._enable_bilibili_subtitle_fetch = initial_enable_bilibili_subtitle_fetch
+        self._enable_youtube_subtitle_fetch = initial_enable_youtube_subtitle_fetch
         self._bilibili_sessdata = _sanitize_cookie_value(initial_bilibili_sessdata)
         self._transcriber_worker: Any = None
 
@@ -304,9 +306,14 @@ class TranscriptionSettingsManager:
         with self._lock:
             current_device = self._device
             enable_bilibili_subtitle_fetch = self._enable_bilibili_subtitle_fetch
+            enable_youtube_subtitle_fetch = self._enable_youtube_subtitle_fetch
             model_source = self._model_source
             model_size = self._model_size
             model_path = self._model_path
+
+        # 获取繁简转换配置
+        from ..config.settings import config
+        convert_traditional_to_simplified = bool(getattr(config.whisper, "convert_traditional_to_simplified", True))
 
         sessdata, source = self.resolve_bilibili_sessdata()
         cuda_diag = _detect_cuda_support()
@@ -341,9 +348,11 @@ class TranscriptionSettingsManager:
             "cuda_reason": str(cuda_diag["cuda_reason"]),
             "cuda_message": str(cuda_diag["cuda_message"]),
             "enable_bilibili_subtitle_fetch": enable_bilibili_subtitle_fetch,
+            "enable_youtube_subtitle_fetch": enable_youtube_subtitle_fetch,
             "has_bilibili_sessdata": bool(sessdata),
             "bilibili_cookie_source": source,
             "bilibili_sessdata_masked": _mask_cookie_value(sessdata),
+            "convert_traditional_to_simplified": convert_traditional_to_simplified,
         }
 
     def _build_transcriber_kwargs(
@@ -379,8 +388,10 @@ class TranscriptionSettingsManager:
         model_size: Literal["tiny", "base", "small", "medium", "large"] | str | None = None,
         model_path: str | None = None,
         enable_bilibili_subtitle_fetch: bool | None = None,
+        enable_youtube_subtitle_fetch: bool | None = None,
         bilibili_sessdata: str | None = None,
         clear_bilibili_sessdata: bool | None = None,
+        convert_traditional_to_simplified: bool | None = None,
     ) -> dict[str, Any]:
         if (
             device is None
@@ -388,8 +399,10 @@ class TranscriptionSettingsManager:
             and model_size is None
             and model_path is None
             and enable_bilibili_subtitle_fetch is None
+            and enable_youtube_subtitle_fetch is None
             and bilibili_sessdata is None
             and clear_bilibili_sessdata is None
+            and convert_traditional_to_simplified is None
         ):
             raise ValueError("至少需要更新一个配置项")
 
@@ -490,6 +503,13 @@ class TranscriptionSettingsManager:
                     f"enable_bilibili_subtitle_fetch={self._enable_bilibili_subtitle_fetch}"
                 )
 
+            if enable_youtube_subtitle_fetch is not None:
+                self._enable_youtube_subtitle_fetch = bool(enable_youtube_subtitle_fetch)
+                logger.info(
+                    "[TranscriptionSettingsManager] 已更新字幕直取开关: "
+                    f"enable_youtube_subtitle_fetch={self._enable_youtube_subtitle_fetch}"
+                )
+
             if clear_bilibili_sessdata:
                 self._bilibili_sessdata = ""
                 logger.info("[TranscriptionSettingsManager] 已清空全局 B 站 SESSDATA。")
@@ -538,6 +558,7 @@ class TranscriptionSettingsManager:
                 "model_size": self._model_size,
                 "model_path": self._model_path,
                 "enable_bilibili_subtitle_fetch": self._enable_bilibili_subtitle_fetch,
+                "enable_youtube_subtitle_fetch": self._enable_youtube_subtitle_fetch,
                 "bilibili_sessdata": self._bilibili_sessdata,
             }
 

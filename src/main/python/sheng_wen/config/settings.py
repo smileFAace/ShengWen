@@ -55,8 +55,10 @@ class WhisperConfig:
     model_size: Literal["tiny", "base", "small", "medium", "large"] = "tiny"
     device: Literal["cpu", "cuda"] = "cpu"
     enable_bilibili_subtitle_fetch: bool = True
+    enable_youtube_subtitle_fetch: bool = True
     bilibili_sessdata: str = ""
     faster_whisper_model_path: str | None = None
+    convert_traditional_to_simplified: bool = True
 
     @property
     def configured_model_path(self) -> str | None:
@@ -119,6 +121,16 @@ class CORSConfig:
 
 
 @dataclass
+class OutputConfig:
+    transcript_dir: str = "temp"
+    summary_dir: str = "temp"
+
+    def __post_init__(self):
+        self.transcript_dir = _resolve_project_path(self.transcript_dir)
+        self.summary_dir = _resolve_project_path(self.summary_dir)
+
+
+@dataclass
 class SummarizationConfig:
     mode: Literal["auto", "standard", "agent"] = "auto"
     auto_chunk_min_audio_duration_sec: int = 2400
@@ -137,6 +149,7 @@ class SummarizationConfig:
     chunk_debug_dump_dir: str = "temp/chunk_debug"
     enable_agent_pipeline: bool = False
     transcript_chunk_emit_duration_sec: int = 600
+    enable_summarization: bool = True
 
     def __post_init__(self):
         normalized_mode = (self.mode or "auto").lower()
@@ -180,6 +193,7 @@ def _build_default_settings() -> dict[str, Any]:
         "database": _dataclass_defaults(DatabaseConfig),
         "cors": _dataclass_defaults(CORSConfig),
         "summarization": _dataclass_defaults(SummarizationConfig),
+        "output": _dataclass_defaults(OutputConfig),
     }
 
 
@@ -294,6 +308,8 @@ class JSONConfigManager:
             whisper_patch["enable_bilibili_subtitle_fetch"] = bool(payload["enable_bilibili_subtitle_fetch"])
         if "bilibili_sessdata" in payload:
             whisper_patch["bilibili_sessdata"] = str(payload.get("bilibili_sessdata") or "")
+        if "convert_traditional_to_simplified" in payload:
+            whisper_patch["convert_traditional_to_simplified"] = bool(payload["convert_traditional_to_simplified"])
         if whisper_patch:
             self.update_section("whisper", whisper_patch)
 
@@ -325,6 +341,7 @@ class JSONConfigManager:
             "fallback_to_standard_on_agent_error",
             "chunk_debug_dump_enabled",
             "enable_agent_pipeline",
+            "enable_summarization",
         ]
         for field in bool_fields:
             if field in payload and payload.get(field) is not None:
@@ -334,6 +351,15 @@ class JSONConfigManager:
         for field in str_fields:
             if field in payload and payload.get(field) is not None:
                 patch[field] = str(payload[field])
+
+        # output 配置项
+        output_fields = ["transcript_dir", "summary_dir"]
+        output_patch = {}
+        for field in output_fields:
+            if field in payload and payload.get(field) is not None:
+                output_patch[field] = str(payload[field])
+        if output_patch:
+            self.update_section("output", output_patch)
 
         if patch:
             self.update_section("summarization", patch)
@@ -473,6 +499,15 @@ class Settings:
     @property
     def summarization(self) -> SummarizationConfig:
         return self._manager.get_summarization_config()
+
+    @property
+    def output(self) -> OutputConfig:
+        raw = self._manager.get_raw_config().get("output", {})
+        defaults = DEFAULT_SETTINGS["output"]
+        return OutputConfig(
+            transcript_dir=str(raw.get("transcript_dir", defaults["transcript_dir"])),
+            summary_dir=str(raw.get("summary_dir", defaults["summary_dir"])),
+        )
 
 
 _config_manager: JSONConfigManager | None = None

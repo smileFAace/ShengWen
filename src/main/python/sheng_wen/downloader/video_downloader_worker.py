@@ -13,6 +13,22 @@ from ..utils.logger import logger
 from ..utils.ffmpeg_helper import FFmpegHelper
 from .bilibili_author_resolver import resolve_bilibili_author, BilibiliAuthorResolveError
 
+try:
+    import opencc
+    OPENCC_AVAILABLE = True
+except ImportError:
+    OPENCC_AVAILABLE = False
+    opencc = None
+
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+    from youtube_transcript_api.formatters import TextFormatter
+    YOUTUBE_TRANSCRIPT_API_AVAILABLE = True
+except ImportError:
+    YOUTUBE_TRANSCRIPT_API_AVAILABLE = False
+    YouTubeTranscriptApi = None
+    TextFormatter = None
+
 class VideoDownloaderWorker(Worker):
     """
     一个工作单元，用于从给定的 URL 下载视频。
@@ -28,7 +44,8 @@ class VideoDownloaderWorker(Worker):
         self.next_worker = next_worker
         self.summary_worker = summary_worker
         self.transcription_settings_manager = transcription_settings_manager
-        self.output_dir = "temp"
+        # 从配置读取输出目录
+        self.output_dir = self._get_output_dir("transcript_dir", "temp")
         os.makedirs(self.output_dir, exist_ok=True)
 
     @staticmethod
@@ -133,6 +150,110 @@ class VideoDownloaderWorker(Worker):
                 best_score = score
                 best_item = item
         return best_item
+
+    @staticmethod
+    def _convert_to_simplified(text: str) -> str:
+        """
+        将繁体/简体中文文本转换为简体中文。
+
+        Args:
+            text: 待转换的文本
+
+        Returns:
+            转换后的简体中文文本
+        """
+        if not text or not text.strip():
+            return text
+
+        # 检查配置是否启用繁简转换
+        from ..config.settings import config
+        convert_enabled = bool(getattr(config.whisper, "convert_traditional_to_simplified", True))
+
+        if not convert_enabled:
+            return text
+
+        # 如果 opencc 不可用，直接返回原文
+        if not OPENCC_AVAILABLE:
+            logger.warning("[VideoDownloader] OpenCC 未安装，无法进行繁简转换，字幕可能包含繁体字。可通过 pip install opencc 安装。")
+            return text
+
+        try:
+            converter = opencc.OpenCC('t2s')  # 繁体转简体
+            return converter.convert(text)
+        except Exception as e:
+            logger.warning(f"[VideoDownloader] 繁简转换失败: {e}")
+            return text
+
+    @staticmethod
+    def _is_summarization_enabled() -> bool:
+        """
+        检查是否启用 AI 总结功能。
+
+        Returns:
+            True 表示启用总结，False 表示跳过总结
+        """
+        from ..config.settings import config
+        return bool(getattr(config.summarization, "enable_summarization", True))
+
+    @staticmethod
+    def _get_output_dir(config_key: str, default: str = "temp") -> str:
+        """
+        从配置获取输出目录，如果未配置则使用默认值。
+
+        Args:
+            config_key: 配置键名 (transcript_dir 或 summary_dir)
+            default: 默认目录
+
+        Returns:
+            输出目录路径
+        """
+        from ..config.settings import config
+        output_dir = getattr(config.output, config_key, None) if hasattr(config, "output") else None
+        if not output_dir:
+            output_dir = default
+        # 确保目录存在
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+
+    def _mark_task_completed_without_summary(self, task_id: str, transcript_file_path: str):
+        """
+        标记任务为已完成（无 AI 总结）。
+
+        Args:
+            task_id: 任务 ID
+            transcript_file_path: 转录文本文件路径
+        """
+        try:
+            # 读取转录文本
+            with open(transcript_file_path, 'r', encoding='utf-8') as f:
+                transcript = f.read()
+
+            # 更新任务状态
+            from ..db import TaskStatus
+            from ..task_updater import update_and_notify
+
+            update_data = {
+                "status": TaskStatus.COMPLETED,
+                "progress": 100,
+                "summary": None,  # 无 AI 总结
+                "summary_mode": "disabled",  # 标记为禁用
+                "summary_chunk_total": None,
+                "summary_chunk_done": None,
+                "summary_meta": None,
+            }
+
+            # 如果转录文本已存在于任务中，不需要重复更新
+            # 这里只需要更新状态即可
+            self._submit_coro(update_and_notify(task_id, update_data))
+
+            logger.info(
+                f"[{self.name}] 任务 {task_id} 已完成转录，跳过 AI 总结（已禁用）"
+            )
+        except Exception as e:
+            logger.error(
+                f"[{self.name}] 标记任务完成失败（无总结模式）: {e}",
+                exc_info=True
+            )
 
     def _resolve_bilibili_sessdata(self, payload: Dict[str, Any]) -> Tuple[str, str]:
         task_override = self._sanitize_cookie_value(str(payload.get("bilibili_sessdata") or ""))
@@ -270,6 +391,9 @@ class VideoDownloaderWorker(Worker):
         if not transcript.strip():
             return None
 
+        # 繁简转换（如果启用）
+        transcript = self._convert_to_simplified(transcript)
+
         language = str(selected.get("lan") or selected.get("lang") or "")
 
         # 获取该分P的具体信息
@@ -390,8 +514,239 @@ class VideoDownloaderWorker(Worker):
 
         return "".join(merged_lines), total_duration
 
+    def _extract_video_id_from_youtube_url(self, video_url: str) -> str | None:
+        """
+        从 YouTube URL 中提取视频 ID。
+
+        Args:
+            video_url: YouTube 视频 URL
+
+        Returns:
+            视频 ID，如果无法提取则返回 None
+        """
+        try:
+            parsed = urlparse(video_url)
+            netloc = parsed.netloc.lower()
+            path = parsed.path
+
+            # 标准格式: https://www.youtube.com/watch?v=VIDEO_ID
+            if netloc in ("youtube.com", "www.youtube.com", "m.youtube.com", "youtube-nocookie.com"):
+                from urllib.parse import parse_qs
+                query_params = parse_qs(parsed.query)
+                video_id = query_params.get("v", [None])[0]
+                if video_id:
+                    return video_id
+
+            # 短链格式: https://youtu.be/VIDEO_ID
+            elif netloc == "youtu.be":
+                video_id = path.lstrip("/")
+                if video_id:
+                    # 移除可能的查询参数
+                    video_id = video_id.split("?")[0]
+                    return video_id
+
+            return None
+        except Exception as e:
+            logger.warning(f"[{self.name}] 提取 YouTube 视频 ID 失败: {e}")
+            return None
+
+    def _extract_youtube_subtitle_via_api(self, video_url: str) -> Dict[str, Any] | None:
+        """
+        使用 youtube-transcript-api 直接提取 YouTube 字幕。
+
+        Args:
+            video_url: YouTube 视频 URL
+
+        Returns:
+            包含字幕信息的字典，或 None 如果获取失败
+        """
+        if not YOUTUBE_TRANSCRIPT_API_AVAILABLE:
+            logger.info(f"[{self.name}] youtube-transcript-api 不可用，无法直接提取字幕")
+            return None
+
+        video_id = self._extract_video_id_from_youtube_url(video_url)
+        if not video_id:
+            logger.warning(f"[{self.name}] 无法从 URL 提取 YouTube 视频 ID: {video_url}")
+            return None
+
+        try:
+            # 尝试获取字幕列表，优先中文字幕
+            transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
+
+            # 优先选择中文字幕（简体或繁体）
+            selected_transcript = None
+            for transcript in transcripts:
+                language_code = transcript.language_code.lower()
+                if language_code.startswith("zh"):
+                    selected_transcript = transcript
+                    break
+
+            # 如果没有中文字幕，使用可用字幕
+            if not selected_transcript:
+                try:
+                    selected_transcript = transcripts.find_transcript(['en', 'en-US'])
+                except:
+                    try:
+                        selected_transcript = transcripts.find_generated_transcript(['en'])
+                    except:
+                        # 使用第一个可用字幕
+                        for transcript in transcripts:
+                            selected_transcript = transcript
+                            break
+
+            if not selected_transcript:
+                logger.info(f"[{self.name}] 未找到可用字幕: {video_id}")
+                return None
+
+            # 提取字幕数据
+            transcript_data = selected_transcript.fetch()
+
+            if not transcript_data:
+                logger.info(f"[{self.name}] 字幕数据为空: {video_id}")
+                return None
+
+            # 使用 TextFormatter 格式化为纯文本，保留时间戳
+            formatter = TextFormatter()
+            transcript_text = formatter.format_transcript(transcript_data)
+
+            # 转换为我们自己的格式：HHMMSS文本
+            lines = []
+            for item in transcript_data:
+                start = item.get('start', 0)
+                text = item.get('text', '').replace('\n', ' ').strip()
+                if text:
+                    # 格式化为 HHMMSS
+                    hours = int(start // 3600)
+                    minutes = int((start % 3600) // 60)
+                    seconds = int(start % 60)
+                    lines.append(f"{hours:02d}{minutes:02d}{seconds:02d}{text}\n")
+
+            transcript = "".join(lines)
+
+            if not transcript.strip():
+                logger.info(f"[{self.name}] 格式化后的字幕为空: {video_id}")
+                return None
+
+            logger.info(f"[{self.name}] 成功提取 YouTube 字幕: video_id={video_id}, language={selected_transcript.language_code}")
+
+            return {
+                "title": f"YouTube Video {video_id}",
+                "duration": sum(item.get('duration', 0) for item in transcript_data),
+                "transcript": transcript,
+                "language": selected_transcript.language_code,
+                "is_auto": selected_transcript.is_generated,
+                "video_id": video_id,
+            }
+
+        except Exception as e:
+            # 记录具体错误，便于调试
+            error_msg = str(e).lower()
+            if "transcriptsdisabled" in error_msg:
+                logger.info(f"[{self.name}] 视频未启用字幕: {video_id}")
+            elif "could not retrieve" in error_msg or "no transcripts found" in error_msg:
+                logger.info(f"[{self.name}] 未找到字幕: {video_id}")
+            else:
+                logger.info(f"[{self.name}] 提取 YouTube 字幕失败: {e}，将回退到 yt-dlp")
+            return None
+
     def _try_extract_bilibili_subtitle(self, video_url: str, sessdata: str) -> Dict[str, Any] | None:
         return asyncio.run(self._extract_bilibili_subtitle_via_api(video_url, sessdata, 0))
+
+    def _try_process_with_youtube_subtitle(self, payload: Dict[str, Any]) -> bool:
+        """
+        尝试直接提取 YouTube 字幕（优先 youtube-transcript-api）。
+
+        Args:
+            payload: 任务负载
+
+        Returns:
+            True 表示成功处理字幕，False 表示失败需要回退到下载流程
+        """
+        video_url = str(payload.get("video_url") or "")
+        task_id = payload.get("task_id")
+
+        if not video_url or not task_id:
+            return False
+        if self.is_task_cancelled(task_id):
+            raise TaskCancelledError(f"任务已取消，跳过字幕直取: {task_id}")
+        if not self._is_youtube_url(video_url):
+            return False
+        if self.summary_worker is None:
+            return False
+
+        # 检查是否启用 YouTube 字幕提取
+        if self.transcription_settings_manager is not None:
+            try:
+                settings = self.transcription_settings_manager.get_settings()
+                if not bool(settings.get("enable_youtube_subtitle_fetch", True)):
+                    return False
+            except Exception as e:
+                logger.warning(f"[{self.name}] 读取转录设置失败，继续回退 ASR: {e}")
+                return False
+
+        logger.info(f"[{self.name}] 检测到 YouTube URL，尝试直接提取字幕: {video_url}")
+
+        try:
+            subtitle_result = self._extract_youtube_subtitle_via_api(video_url)
+            if not subtitle_result:
+                logger.info(f"[{self.name}] 未获取到可用字幕，回退到下载+ASR流程。")
+                return False
+
+            transcript = subtitle_result["transcript"]
+
+            # 繁简转换（如果启用）
+            transcript = self._convert_to_simplified(transcript)
+
+            intermediate_file_path = os.path.join(self.output_dir, f"{task_id}_subtitle.txt")
+            # summary_dir 从配置获取，用于保存 AI 总结文件
+            summary_dir = self._get_output_dir("summary_dir", "temp")
+            output_file = os.path.join(summary_dir, f"{task_id}_summary.md")
+
+            with open(intermediate_file_path, "w", encoding="utf-8", errors="replace") as f:
+                f.write(transcript)
+
+            from ..db import TaskStatus
+            from ..task_updater import update_and_notify
+            self._submit_coro(update_and_notify(task_id, {"status": TaskStatus.TRANSCRIBING}))
+
+            if self.is_task_cancelled(task_id):
+                raise TaskCancelledError(f"任务已取消，停止字幕分支: {task_id}")
+
+            update_data = {
+                "title": subtitle_result.get("title"),
+                "status": TaskStatus.SUMMARIZING,
+                "progress": 0.0,
+                "transcript": transcript,
+                "transcription_time": 0.0,
+                "audio_duration": subtitle_result.get("duration"),
+                "summary_chunk_total": None,
+                "summary_chunk_done": None,
+                "summary_meta": None,
+            }
+            summary_mode = str(payload.get("summary_mode") or "").strip().lower()
+            if summary_mode in {"auto", "standard", "agent"}:
+                update_data["summary_mode"] = summary_mode
+            self._submit_coro(update_and_notify(task_id, update_data))
+
+            next_payload = payload.copy()
+            next_payload.update({
+                "intermediate_file_path": intermediate_file_path,
+                "output_file": output_file,
+            })
+
+            # 检查是否启用 AI 总结
+            if self._is_summarization_enabled():
+                # 启用总结，传递给 summary_worker
+                self.summary_worker.process_task(next_payload)
+            else:
+                # 禁用总结，标记任务完成
+                self._mark_task_completed_without_summary(task_id, intermediate_file_path)
+
+            return True
+
+        except Exception as e:
+            logger.info(f"[{self.name}] YouTube 字幕提取失败: {e}，将回退到下载+ASR流程")
+            return False
 
     def _try_process_with_bilibili_subtitle(self, payload: Dict[str, Any]) -> bool:
         video_url = str(payload.get("video_url") or "")
@@ -445,7 +800,9 @@ class VideoDownloaderWorker(Worker):
 
             transcript = subtitle_result["transcript"]
             intermediate_file_path = os.path.join(self.output_dir, f"{task_id}_subtitle.txt")
-            output_file = os.path.join(self.output_dir, f"{task_id}_summary.md")
+            # summary_dir 从配置获取，用于保存 AI 总结文件
+            summary_dir = self._get_output_dir("summary_dir", "temp")
+            output_file = os.path.join(summary_dir, f"{task_id}_summary.md")
 
             with open(intermediate_file_path, "w", encoding="utf-8", errors="replace") as f:
                 f.write(transcript)
@@ -478,9 +835,17 @@ class VideoDownloaderWorker(Worker):
                 "intermediate_file_path": intermediate_file_path,
                 "output_file": output_file,
             })
-            if self.is_task_cancelled(task_id):
-                raise TaskCancelledError(f"任务已取消，停止派发总结: {task_id}")
-            self._submit_coro(self.summary_worker.add_task(next_payload))
+
+            # 检查是否启用 AI 总结
+            enable_summarization = self._is_summarization_enabled()
+
+            if enable_summarization:
+                if self.is_task_cancelled(task_id):
+                    raise TaskCancelledError(f"任务已取消，停止派发总结: {task_id}")
+                self._submit_coro(self.summary_worker.add_task(next_payload))
+            else:
+                # 跳过 AI 总结，直接标记任务完成
+                self._mark_task_completed_without_summary(task_id, intermediate_file_path)
 
             logger.info(
                 f"[{self.name}] 已使用B站字幕（{subtitle_result.get('language')}），跳过音频转录。"
@@ -534,7 +899,8 @@ class VideoDownloaderWorker(Worker):
                 title_suffix = f" (已合并 {len(part_indices)} 个分P)"
 
             intermediate_file_path = os.path.join(self.output_dir, f"{task_id}_subtitle.txt")
-            output_file = os.path.join(self.output_dir, f"{task_id}_summary.md")
+            summary_dir = self._get_output_dir("summary_dir", "temp")
+            output_file = os.path.join(summary_dir, f"{task_id}_summary.md")
 
             with open(intermediate_file_path, "w", encoding="utf-8", errors="replace") as f:
                 f.write(merged_transcript)
@@ -567,9 +933,17 @@ class VideoDownloaderWorker(Worker):
                 "intermediate_file_path": intermediate_file_path,
                 "output_file": output_file,
             })
-            if self.is_task_cancelled(task_id):
-                raise TaskCancelledError(f"任务已取消，停止派发总结: {task_id}")
-            self._submit_coro(self.summary_worker.add_task(next_payload))
+
+            # 检查是否启用 AI 总结
+            enable_summarization = self._is_summarization_enabled()
+
+            if enable_summarization:
+                if self.is_task_cancelled(task_id):
+                    raise TaskCancelledError(f"任务已取消，停止派发总结: {task_id}")
+                self._submit_coro(self.summary_worker.add_task(next_payload))
+            else:
+                # 跳过 AI 总结，直接标记任务完成
+                self._mark_task_completed_without_summary(task_id, intermediate_file_path)
 
             logger.info(
                 f"[{self.name}] 已合并 {len(subtitle_results)} 个分P的字幕，"
@@ -628,6 +1002,11 @@ class VideoDownloaderWorker(Worker):
             if task_id and self.is_task_cancelled(task_id):
                 raise TaskCancelledError(f"任务已取消，跳过下载: {task_id}")
 
+            # 优先尝试 YouTube 字幕直取
+            if self._try_process_with_youtube_subtitle(payload):
+                return
+
+            # 然后尝试 B 站字幕直取
             if self._try_process_with_bilibili_subtitle(payload):
                 return
         except TaskCancelledError as e:
@@ -815,7 +1194,8 @@ class VideoDownloaderWorker(Worker):
                 next_payload['video_file'] = video_path
                 base_name = os.path.splitext(os.path.basename(video_path))[0]
                 next_payload['audio_file'] = os.path.join(self.output_dir, f"{base_name}.mp3")
-                next_payload['output_file'] = os.path.join(self.output_dir, f"{base_name}_summary.md")
+                summary_dir = self._get_output_dir("summary_dir", "temp")
+                next_payload['output_file'] = os.path.join(summary_dir, f"{base_name}_summary.md")
                 
                 self._submit_coro(self.next_worker.add_task(next_payload))
 

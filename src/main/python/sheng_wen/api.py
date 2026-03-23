@@ -199,9 +199,11 @@ class TranscriptionSettings(BaseModel):
     cuda_reason: str
     cuda_message: str
     enable_bilibili_subtitle_fetch: bool
+    enable_youtube_subtitle_fetch: bool
     has_bilibili_sessdata: bool
     bilibili_cookie_source: str
     bilibili_sessdata_masked: str
+    convert_traditional_to_simplified: bool
 
 
 class TranscriptionSettingsUpdate(BaseModel):
@@ -213,6 +215,10 @@ class TranscriptionSettingsUpdate(BaseModel):
         default=None,
         description="是否优先尝试直取 B 站字幕（失败时回退 ASR）"
     )
+    enable_youtube_subtitle_fetch: Optional[bool] = Field(
+        default=None,
+        description="是否优先尝试直取 YouTube 字幕（失败时回退 ASR）"
+    )
     bilibili_sessdata: Optional[str] = Field(
         default=None,
         description="设置全局 B 站 SESSDATA（明文保存在本机 config/settings.json）",
@@ -221,6 +227,11 @@ class TranscriptionSettingsUpdate(BaseModel):
         default=None,
         description="是否清空当前保存的全局 B 站 SESSDATA",
     )
+    convert_traditional_to_simplified: Optional[bool] = Field(
+        default=None,
+        description="是否将繁体字幕转换为简体中文"
+    )
+    
 
 
 class BilibiliCookieFromBrowserResult(BaseModel):
@@ -285,6 +296,9 @@ class SummarizationSettings(BaseModel):
     llm_call_retry_max: int
     max_agent_value_chars: int
     fallback_to_standard_on_agent_error: bool
+    enable_summarization: bool
+    transcript_dir: str
+    summary_dir: str
 
 
 class SummarizationSettingsUpdate(BaseModel):
@@ -300,6 +314,18 @@ class SummarizationSettingsUpdate(BaseModel):
     llm_call_retry_max: Optional[int] = Field(default=None, ge=1)
     max_agent_value_chars: Optional[int] = Field(default=None, ge=100)
     fallback_to_standard_on_agent_error: Optional[bool] = None
+    enable_summarization: Optional[bool] = Field(
+        default=None,
+        description="是否启用 AI 总结"
+    )
+    transcript_dir: Optional[str] = Field(
+        default=None,
+        description="转录文件保存目录"
+    )
+    summary_dir: Optional[str] = Field(
+        default=None,
+        description="总结文件保存目录"
+    )
 
 
 class LLMTestResult(BaseModel):
@@ -408,6 +434,7 @@ initial_transcription_device = str(whisper_cfg.device).lower()
 if initial_transcription_device not in {"cpu", "cuda"}:
     initial_transcription_device = "cpu"
 initial_enable_bilibili_subtitle_fetch = bool(whisper_cfg.enable_bilibili_subtitle_fetch)
+initial_enable_youtube_subtitle_fetch = bool(whisper_cfg.enable_youtube_subtitle_fetch)
 initial_bilibili_sessdata = str(whisper_cfg.bilibili_sessdata or "")
 
 transcription_settings_manager = TranscriptionSettingsManager(
@@ -416,6 +443,7 @@ transcription_settings_manager = TranscriptionSettingsManager(
     model_size=whisper_cfg.model_size,
     model_path=whisper_cfg.configured_model_path,
     initial_enable_bilibili_subtitle_fetch=initial_enable_bilibili_subtitle_fetch,
+    initial_enable_youtube_subtitle_fetch=initial_enable_youtube_subtitle_fetch,
     initial_bilibili_sessdata=initial_bilibili_sessdata,
 )
 llm_provider_manager = LLMProviderManager(
@@ -1375,10 +1403,17 @@ async def update_transcription_settings(payload: TranscriptionSettingsUpdate):
             model_size=payload.model_size,
             model_path=payload.model_path,
             enable_bilibili_subtitle_fetch=payload.enable_bilibili_subtitle_fetch,
+            enable_youtube_subtitle_fetch=payload.enable_youtube_subtitle_fetch,
             bilibili_sessdata=payload.bilibili_sessdata,
             clear_bilibili_sessdata=payload.clear_bilibili_sessdata,
         )
-        config_manager.save_transcription_config(transcription_settings_manager.get_runtime_state())
+
+        # 保存繁简转换配置
+        runtime_state = transcription_settings_manager.get_runtime_state()
+        if payload.convert_traditional_to_simplified is not None:
+            runtime_state["convert_traditional_to_simplified"] = payload.convert_traditional_to_simplified
+
+        config_manager.save_transcription_config(runtime_state)
         return settings
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1482,6 +1517,11 @@ async def read_bilibili_cookie_from_browser():
 async def get_summarization_settings():
     """获取当前总结策略配置（含 Agent 分块参数）。"""
     cfg = config.summarization
+
+    # 获取输出目录配置
+    transcript_dir = str(getattr(config.output, "transcript_dir", "temp")) if hasattr(config, "output") else "temp"
+    summary_dir = str(getattr(config.output, "summary_dir", "temp")) if hasattr(config, "output") else "temp"
+
     return SummarizationSettings(
         mode=str(cfg.mode),
         auto_chunk_min_audio_duration_sec=int(cfg.auto_chunk_min_audio_duration_sec),
@@ -1495,6 +1535,9 @@ async def get_summarization_settings():
         llm_call_retry_max=int(cfg.llm_call_retry_max),
         max_agent_value_chars=int(cfg.max_agent_value_chars),
         fallback_to_standard_on_agent_error=bool(cfg.fallback_to_standard_on_agent_error),
+        enable_summarization=bool(getattr(cfg, "enable_summarization", True)),
+        transcript_dir=transcript_dir,
+        summary_dir=summary_dir,
     )
 
 

@@ -28,8 +28,29 @@ class FileUploadWorker(Worker):
     def __init__(self, name: str, next_worker: Worker = None):
         super().__init__(name)
         self.next_worker = next_worker
-        self.output_dir = "temp"
+        # 从配置读取输出目录（转录文件目录）
+        self.output_dir = self._get_output_dir("transcript_dir", "temp")
         os.makedirs(self.output_dir, exist_ok=True)
+
+    @staticmethod
+    def _get_output_dir(config_key: str, default: str = "temp") -> str:
+        """
+        从配置获取输出目录，如果未配置则使用默认值。
+
+        Args:
+            config_key: 配置键名 (transcript_dir 或 summary_dir)
+            default: 默认目录
+
+        Returns:
+            输出目录路径
+        """
+        from ..config.settings import config
+        output_dir = getattr(config.output, config_key, None) if hasattr(config, "output") else None
+        if not output_dir:
+            output_dir = default
+        # 确保目录存在
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
 
     async def process_task(self, payload: Any):
         """

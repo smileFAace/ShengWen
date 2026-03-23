@@ -100,9 +100,11 @@ export interface TranscriptionSettings {
   cuda_reason: string;
   cuda_message: string;
   enable_bilibili_subtitle_fetch: boolean;
+  enable_youtube_subtitle_fetch: boolean;
   has_bilibili_sessdata: boolean;
   bilibili_cookie_source: string;
   bilibili_sessdata_masked: string;
+  convert_traditional_to_simplified: boolean;
 }
 
 export interface UpdateTranscriptionSettingsRequest {
@@ -111,8 +113,10 @@ export interface UpdateTranscriptionSettingsRequest {
   model_size?: "tiny" | "base" | "small" | "medium" | "large";
   model_path?: string;
   enable_bilibili_subtitle_fetch?: boolean;
+  enable_youtube_subtitle_fetch?: boolean;
   bilibili_sessdata?: string;
   clear_bilibili_sessdata?: boolean;
+  convert_traditional_to_simplified?: boolean;
 }
 
 export interface SummarizationSettings {
@@ -128,6 +132,9 @@ export interface SummarizationSettings {
   llm_call_retry_max: number;
   max_agent_value_chars: number;
   fallback_to_standard_on_agent_error: boolean;
+  enable_summarization: boolean;
+  transcript_dir: string;
+  summary_dir: string;
 }
 
 export interface UpdateSummarizationSettingsRequest {
@@ -143,6 +150,9 @@ export interface UpdateSummarizationSettingsRequest {
   llm_call_retry_max?: number;
   max_agent_value_chars?: number;
   fallback_to_standard_on_agent_error?: boolean;
+  enable_summarization?: boolean;
+  transcript_dir?: string;
+  summary_dir?: string;
 }
 
 export interface BilibiliCookieFromBrowserResult {
