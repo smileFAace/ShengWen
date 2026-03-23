@@ -64,6 +64,7 @@ const emit = defineEmits<{
     fallback_to_standard_on_agent_error?: boolean
     transcript_dir?: string
     summary_dir?: string
+    enable_summarization?: boolean
   }]
 }>()
 
@@ -97,6 +98,9 @@ const fallbackToStandardOnAgentError = ref(true)
 // 输出目录设置
 const transcriptDir = ref('temp')
 const summaryDir = ref('temp')
+
+// 总结开关
+const enableSummarization = ref(true)
 
 const secondsToMinutes = (seconds: number) => {
   return Math.round((Number(seconds || 0) / 60) * 10) / 10
@@ -151,6 +155,7 @@ watch(() => props.summarizationSettings, (settings) => {
     fallbackToStandardOnAgentError.value = settings.fallback_to_standard_on_agent_error
     transcriptDir.value = settings.transcript_dir || 'temp'
     summaryDir.value = settings.summary_dir || 'temp'
+    enableSummarization.value = settings.enable_summarization ?? true
   }
 }, { immediate: true })
 
@@ -255,6 +260,7 @@ const handleSaveSummarizationSettings = () => {
     fallback_to_standard_on_agent_error: fallbackToStandardOnAgentError.value,
     transcript_dir: transcriptDir.value.trim() || 'temp',
     summary_dir: summaryDir.value.trim() || 'temp',
+    enable_summarization: enableSummarization.value,
   })
 }
 </script>
@@ -668,6 +674,35 @@ const handleSaveSummarizationSettings = () => {
 
           <!-- Agent 设置 -->
           <div v-if="settingsTab === 'summarization'" class="space-y-4">
+            <!-- 启用 AI 总结 -->
+            <div class="rounded-xl border border-slate-200 bg-white p-4">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <PhBrain :size="20" class="text-blue-500" />
+                  <div>
+                    <h3 class="text-sm font-semibold text-slate-800">启用 AI 总结</h3>
+                    <p class="text-xs text-slate-500 mt-0.5">关闭后，转录完成将不会自动进行 AI 总结</p>
+                  </div>
+                </div>
+                <button
+                  @click="enableSummarization = !enableSummarization"
+                  :class="[
+                    'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
+                    enableSummarization ? 'bg-blue-500' : 'bg-slate-300'
+                  ]"
+                  role="switch"
+                  :aria-checked="enableSummarization"
+                >
+                  <span
+                    :class="[
+                      'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                      enableSummarization ? 'translate-x-5' : 'translate-x-0'
+                    ]"
+                  ></span>
+                </button>
+              </div>
+            </div>
+
             <!-- 使用说明 -->
             <div class="rounded-xl border border-slate-200 bg-white p-4 space-y-2">
               <div class="flex items-center gap-2 pb-2 border-b border-slate-100">
