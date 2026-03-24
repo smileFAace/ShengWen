@@ -83,7 +83,7 @@ interface RenderPageContext {
 }
 
 const BASE_EXPORT_WIDTH = 1080
-const DEFAULT_SHARE_URL = 'https://github.com/smileFAace/ShengWen'
+const DEFAULT_SHARE_URL = 'https://github.com/zzyong24/ShengWen'
 const EXPORT_FONT_FAMILY = "'Microsoft YaHei', 'Segoe UI', 'Consolas', sans-serif"
 const HEADER_HORIZONTAL_PADDING = 44
 const CONTENT_HORIZONTAL_PADDING = 76
@@ -590,7 +590,7 @@ const createPageCard = (
   aiIcon.style.fontSize = scalePx(16)
 
   const footerMainText = document.createElement('span')
-  footerMainText.textContent = '由 声文智汇(ShengWen) 智能总结'
+  footerMainText.textContent = '由 ShengWen 智能总结'
   footerMainText.style.color = '#a7b6ca'
 
   const footerProjectRow = document.createElement('div')

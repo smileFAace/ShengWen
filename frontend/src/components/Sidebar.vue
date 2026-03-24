@@ -654,7 +654,7 @@ watch(() => props.summarizationSettings, (settings) => {
                 <PhWaveSine :size="20" weight="bold" />
               </div>
               <div class="min-w-0">
-                <h1 class="text-lg font-bold text-slate-900 tracking-tight truncate">声文智汇</h1>
+                <h1 class="text-lg font-bold text-slate-900 tracking-tight truncate">ShengWen</h1>
                 <p class="text-[11px] text-slate-500">
                   {{ sidebarTab === 'quick' ? '新建任务与快速浏览' : sidebarTab === 'manage' ? '全部任务搜索视图' : 'Markdown 样式主题' }} · v{{ appVersion }}
                 </p>
