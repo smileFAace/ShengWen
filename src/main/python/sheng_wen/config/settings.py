@@ -55,6 +55,8 @@ class WhisperConfig:
     model_path: str | None = None
     model_size: Literal["tiny", "base", "small", "medium", "large"] = "tiny"
     device: Literal["cpu", "cuda"] = "cpu"
+    compute_type_mode: Literal["auto", "manual"] = "auto"
+    compute_type: Literal["int8", "float16", "float32", "bfloat16"] = "int8"
     enable_bilibili_subtitle_fetch: bool = True
     bilibili_sessdata: str = ""
     faster_whisper_model_path: str | None = None
@@ -492,6 +494,12 @@ class JSONConfigManager:
             whisper_patch["model_size"] = size if size in {"tiny", "base", "small", "medium", "large"} else "tiny"
         if "model_path" in payload:
             whisper_patch["model_path"] = str(payload.get("model_path") or "").strip() or None
+        if "compute_type_mode" in payload:
+            mode = str(payload.get("compute_type_mode") or "auto").strip().lower()
+            whisper_patch["compute_type_mode"] = mode if mode in {"auto", "manual"} else "auto"
+        if "compute_type" in payload:
+            ctype = str(payload.get("compute_type") or "int8").strip().lower()
+            whisper_patch["compute_type"] = ctype if ctype in {"int8", "float16", "float32", "bfloat16"} else "int8"
         if resolved_model_source == "auto_download":
             # 用户显式切回自动下载时，清空手动路径，避免重启后被兼容逻辑回推到 manual_path。
             whisper_patch["model_path"] = None
@@ -568,6 +576,12 @@ class JSONConfigManager:
         device = str(raw.get("device", defaults["device"])).lower()
         if device not in {"cpu", "cuda"}:
             device = str(defaults["device"])
+        compute_type_mode = str(raw.get("compute_type_mode", defaults.get("compute_type_mode", "auto"))).lower()
+        if compute_type_mode not in {"auto", "manual"}:
+            compute_type_mode = str(defaults.get("compute_type_mode", "auto"))
+        compute_type = str(raw.get("compute_type", defaults.get("compute_type", "int8"))).lower()
+        if compute_type not in {"int8", "float16", "float32", "bfloat16"}:
+            compute_type = str(defaults.get("compute_type", "int8"))
         model_path = raw.get("model_path", defaults["model_path"])
         faster_whisper_model_path = raw.get("faster_whisper_model_path", defaults["faster_whisper_model_path"])
         if model_source == "auto_download":
@@ -579,6 +593,8 @@ class JSONConfigManager:
             model_path=model_path,
             model_size=model_size,  # type: ignore[arg-type]
             device=device,  # type: ignore[arg-type]
+            compute_type_mode=compute_type_mode,  # type: ignore[arg-type]
+            compute_type=compute_type,  # type: ignore[arg-type]
             enable_bilibili_subtitle_fetch=bool(
                 raw.get("enable_bilibili_subtitle_fetch", defaults["enable_bilibili_subtitle_fetch"])
             ),

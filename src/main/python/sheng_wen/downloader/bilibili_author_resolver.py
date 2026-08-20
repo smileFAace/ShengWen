@@ -1,8 +1,10 @@
 import asyncio
 from dataclasses import asdict, dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yt_dlp
+
+from .bilibili_yt_dlp import bilibili_ydl_auth_context, sanitize_sessdata
 
 
 class BilibiliAuthorResolveError(RuntimeError):
@@ -34,16 +36,16 @@ def _normalize_author_url(raw_author_url: str, author_id: str) -> str:
     return ""
 
 
-def _extract_bilibili_author(video_url: str) -> BilibiliAuthorInfo:
+def _extract_bilibili_author(video_url: str, sessdata: str = "") -> BilibiliAuthorInfo:
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "extract_flat": False,
     }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info_dict = ydl.extract_info(video_url, download=False)
+    with bilibili_ydl_auth_context(ydl_opts, sessdata):
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(video_url, download=False)
 
     info = _unwrap_info_dict(info_dict)
     author_name = str(info.get("uploader") or info.get("channel") or "").strip()
@@ -64,11 +66,16 @@ def _extract_bilibili_author(video_url: str) -> BilibiliAuthorInfo:
     )
 
 
-async def resolve_bilibili_author(video_url: str, timeout_sec: float = 20.0) -> Dict[str, str]:
+async def resolve_bilibili_author(
+    video_url: str,
+    timeout_sec: float = 20.0,
+    sessdata: Optional[str] = None,
+) -> Dict[str, str]:
     """异步解析 B 站视频作者信息。"""
+    cookie = sanitize_sessdata(sessdata)
     try:
         result = await asyncio.wait_for(
-            asyncio.to_thread(_extract_bilibili_author, video_url),
+            asyncio.to_thread(_extract_bilibili_author, video_url, cookie),
             timeout=timeout_sec,
         )
     except asyncio.TimeoutError as exc:

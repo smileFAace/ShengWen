@@ -65,6 +65,8 @@ const emit = defineEmits<{
     model_source?: 'auto_download' | 'manual_path'
     model_size?: 'tiny' | 'base' | 'small' | 'medium' | 'large'
     model_path?: string
+    compute_type_mode?: 'auto' | 'manual'
+    compute_type?: 'int8' | 'float16' | 'float32' | 'bfloat16'
     enable_bilibili_subtitle_fetch?: boolean
     bilibili_sessdata?: string
     clear_bilibili_sessdata?: boolean
@@ -151,6 +153,8 @@ const transcriptionDevice = ref<'cpu' | 'cuda'>('cpu')
 const transcriptionModelSource = ref<'auto_download' | 'manual_path'>('auto_download')
 const transcriptionModelSize = ref<'tiny' | 'base' | 'small' | 'medium' | 'large'>('tiny')
 const transcriptionModelPathInput = ref('')
+const transcriptionComputeTypeMode = ref<'auto' | 'manual'>('auto')
+const transcriptionComputeType = ref<'int8' | 'float16' | 'float32' | 'bfloat16'>('int8')
 const enableBilibiliSubtitleFetch = ref(true)
 const globalBilibiliSessdataInput = ref('')
 
@@ -191,6 +195,8 @@ watch(() => props.transcriptionSettings, (settings) => {
     transcriptionModelSource.value = settings.model_source || 'auto_download'
     transcriptionModelSize.value = settings.model_size || 'tiny'
     transcriptionModelPathInput.value = settings.model_path || ''
+    transcriptionComputeTypeMode.value = settings.compute_type_mode || 'auto'
+    transcriptionComputeType.value = settings.manual_compute_type || settings.compute_type || 'int8'
     enableBilibiliSubtitleFetch.value = settings.enable_bilibili_subtitle_fetch ?? true
   }
 }, { immediate: true })
@@ -266,6 +272,8 @@ const handleSaveTranscriptionSettings = () => {
     model_source?: 'auto_download' | 'manual_path'
     model_size?: 'tiny' | 'base' | 'small' | 'medium' | 'large'
     model_path?: string
+    compute_type_mode?: 'auto' | 'manual'
+    compute_type?: 'int8' | 'float16' | 'float32' | 'bfloat16'
     enable_bilibili_subtitle_fetch?: boolean
     bilibili_sessdata?: string
   } = {
@@ -273,6 +281,8 @@ const handleSaveTranscriptionSettings = () => {
     model_source: transcriptionModelSource.value,
     model_size: transcriptionModelSize.value,
     model_path: transcriptionModelPathInput.value.trim(),
+    compute_type_mode: transcriptionComputeTypeMode.value,
+    compute_type: transcriptionComputeType.value,
     enable_bilibili_subtitle_fetch: enableBilibiliSubtitleFetch.value
   }
 
@@ -632,6 +642,55 @@ const handleSaveSummarizationSettings = () => {
                     <div class="font-medium">CUDA</div>
                     <div class="text-xs text-slate-500 mt-0.5">NVIDIA GPU 加速</div>
                   </button>
+                </div>
+              </div>
+
+              <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 space-y-3">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="text-sm font-medium text-slate-700">计算精度策略</p>
+                  <span class="text-xs px-2 py-0.5 rounded-full border border-slate-300 bg-white text-slate-600">
+                    当前生效: {{ transcriptionSettings?.compute_type || 'int8' }}
+                  </span>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <button
+                    @click="transcriptionComputeTypeMode = 'auto'"
+                    :class="[
+                      'px-4 py-3 rounded-xl border-2 text-left transition-all',
+                      transcriptionComputeTypeMode === 'auto'
+                        ? 'border-blue-500 bg-blue-50 text-blue-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    ]"
+                  >
+                    <div class="font-medium">自动检测</div>
+                    <div class="text-xs text-slate-500 mt-0.5">CPU=int8，CUDA=FP32</div>
+                  </button>
+                  <button
+                    @click="transcriptionComputeTypeMode = 'manual'"
+                    :class="[
+                      'px-4 py-3 rounded-xl border-2 text-left transition-all',
+                      transcriptionComputeTypeMode === 'manual'
+                        ? 'border-blue-500 bg-blue-50 text-blue-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    ]"
+                  >
+                    <div class="font-medium">手动指定</div>
+                    <div class="text-xs text-slate-500 mt-0.5">按机器自行覆盖</div>
+                  </button>
+                </div>
+
+                <div>
+                  <label class="block text-xs text-slate-600 mb-1.5">手动精度</label>
+                  <select
+                    v-model="transcriptionComputeType"
+                    :disabled="transcriptionComputeTypeMode !== 'manual'"
+                    class="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-60"
+                  >
+                    <option v-for="option in (transcriptionSettings?.available_compute_types || ['int8'])" :key="option" :value="option">
+                      {{ option }}
+                    </option>
+                  </select>
                 </div>
               </div>
             </div>

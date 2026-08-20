@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import uuid
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -12,6 +13,7 @@ from ..worker import Worker, TaskCancelledError
 from ..utils.logger import logger
 from ..utils.ffmpeg_helper import FFmpegHelper
 from .bilibili_author_resolver import resolve_bilibili_author, BilibiliAuthorResolveError
+from .bilibili_yt_dlp import bilibili_ydl_auth_context
 
 class VideoDownloaderWorker(Worker):
     """
@@ -580,12 +582,255 @@ class VideoDownloaderWorker(Worker):
             logger.error(f"[{self.name}] 处理多P视频合并失败: {e}", exc_info=True)
             return False
 
-    async def _resolve_and_save_bilibili_author(self, task_id: str, video_url: str):
+    @staticmethod
+    def _playlist_items_from_payload(payload: Dict[str, Any]) -> str | None:
+        """将 bilibili_parts.indices（0-based）转为 yt-dlp playlist_items（1-based）。"""
+        bilibili_parts = payload.get("bilibili_parts")
+        if not isinstance(bilibili_parts, dict):
+            return None
+        indices = bilibili_parts.get("indices")
+        if not isinstance(indices, list) or not indices:
+            return None
+        items: List[int] = []
+        for raw in indices:
+            try:
+                idx = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if idx < 0:
+                continue
+            items.append(idx + 1)
+        if not items:
+            return None
+        return ",".join(str(i) for i in sorted(set(items)))
+
+    def _find_cached_media_by_stem(self, stem: str) -> str | None:
+        if not stem:
+            return None
+        for ext in (".mp4", ".mkv", ".webm", ".m4a"):
+            path = os.path.join(self.output_dir, f"{stem}{ext}")
+            if os.path.isfile(path) and os.path.getsize(path) > 0:
+                return path
+        return None
+
+    def _try_resolve_bilibili_cache_paths(
+        self, video_url: str, playlist_items: str | None
+    ) -> List[str] | None:
+        """
+        若本地已有对应 B 站视频文件，返回路径列表；否则返回 None。
+        共享缓存命名约定：{bvid}.mp4 或 {bvid}_p{N}.mp4
+        """
+        try:
+            bvid = self._extract_bvid_from_url(video_url)
+        except ValueError:
+            return None
+
+        if playlist_items:
+            part_nums: List[int] = []
+            for raw in playlist_items.split(","):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    part_nums.append(int(raw))
+                except ValueError:
+                    return None
+            if not part_nums:
+                return None
+
+            paths: List[str] = []
+            for part_no in part_nums:
+                cached = self._find_cached_media_by_stem(f"{bvid}_p{part_no}")
+                if not cached:
+                    return None
+                paths.append(cached)
+            return paths
+
+        single = self._find_cached_media_by_stem(bvid)
+        if single:
+            return [single]
+        return None
+
+    def _finalize_paths_to_video(
+        self, paths: List[str], task_id: str | None
+    ) -> str:
+        if not paths:
+            raise FileNotFoundError("未找到可用的视频文件")
+        if len(paths) == 1:
+            return paths[0]
+        merge_name = f"{task_id}_merged.mp4" if task_id else f"{uuid.uuid4()}_merged.mp4"
+        output_path = os.path.join(self.output_dir, merge_name)
+        logger.info(
+            f"[{self.name}] 检测到 {len(paths)} 个分P文件，开始合并为: {output_path}"
+        )
+        return self._concat_video_files(paths, output_path)
+
+    @staticmethod
+    def _candidate_media_paths(path: str) -> List[str]:
+        if not path:
+            return []
+        candidates = [path]
+        base, ext = os.path.splitext(path)
+        for candidate_ext in (".mp4", ".mkv", ".webm", ".m4a", ".mp3", ext):
+            if not candidate_ext:
+                continue
+            candidate = base + candidate_ext
+            if candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
+
+    @classmethod
+    def _resolve_existing_media_path(cls, ydl: yt_dlp.YoutubeDL, info: Dict[str, Any]) -> str | None:
+        filepath = str(info.get("filepath") or "").strip()
+        if filepath and os.path.exists(filepath):
+            return filepath
+
+        for req in info.get("requested_downloads") or []:
+            if not isinstance(req, dict):
+                continue
+            req_path = str(req.get("filepath") or "").strip()
+            if req_path and os.path.exists(req_path):
+                return req_path
+
+        prepared = ""
+        try:
+            prepared = ydl.prepare_filename(info)
+        except Exception:
+            prepared = ""
+
+        for candidate in cls._candidate_media_paths(prepared):
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    @classmethod
+    def _collect_downloaded_video_paths(
+        cls, ydl: yt_dlp.YoutubeDL, info_dict: Dict[str, Any]
+    ) -> List[str]:
+        paths: List[str] = []
+        if info_dict.get("_type") == "playlist":
+            for entry in info_dict.get("entries") or []:
+                if not isinstance(entry, dict):
+                    continue
+                path = cls._resolve_existing_media_path(ydl, entry)
+                if path:
+                    paths.append(path)
+            return paths
+
+        path = cls._resolve_existing_media_path(ydl, info_dict)
+        if path:
+            paths.append(path)
+        return paths
+
+    def _concat_video_files(self, video_paths: List[str], output_path: str) -> str:
+        if len(video_paths) == 1:
+            return video_paths[0]
+
+        ffmpeg_path = FFmpegHelper.get_ffmpeg_path()
+        if not ffmpeg_path:
+            raise RuntimeError("未找到 ffmpeg，无法合并多分P视频")
+
+        list_path = f"{output_path}.concat.txt"
+        with open(list_path, "w", encoding="utf-8") as handle:
+            for path in video_paths:
+                normalized = os.path.abspath(path).replace("\\", "/")
+                escaped = normalized.replace("'", r"'\''")
+                handle.write(f"file '{escaped}'\n")
+
+        cmd = [
+            ffmpeg_path,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            list_path,
+            "-c",
+            "copy",
+            output_path,
+        ]
+        try:
+            completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if completed.returncode != 0:
+                stderr = (completed.stderr or completed.stdout or "").strip()
+                raise RuntimeError(f"ffmpeg 合并多分P失败: {stderr[-500:]}")
+            if not os.path.exists(output_path):
+                raise RuntimeError(f"ffmpeg 合并完成但未生成文件: {output_path}")
+            return output_path
+        finally:
+            try:
+                os.unlink(list_path)
+            except OSError:
+                pass
+
+    def _resolve_download_output_path(
+        self,
+        ydl: yt_dlp.YoutubeDL,
+        info_dict: Dict[str, Any],
+        task_id: str | None,
+    ) -> str:
+        paths = self._collect_downloaded_video_paths(ydl, info_dict)
+        return self._finalize_paths_to_video(paths, task_id)
+
+    def _dispatch_after_download(
+        self,
+        payload: Dict[str, Any],
+        video_url: str,
+        video_path: str,
+        info_dict: Dict[str, Any] | None,
+        task_id: str | None,
+        bilibili_sessdata: str,
+    ) -> None:
+        if task_id and self.is_task_cancelled(task_id):
+            raise TaskCancelledError(f"任务已取消，停止后续处理: {task_id}")
+
+        if task_id and self._is_bilibili_url(str(video_url)):
+            self._submit_coro(
+                self._resolve_and_save_bilibili_author(
+                    task_id, str(video_url), sessdata=bilibili_sessdata
+                )
+            )
+
+        if task_id:
+            logger.info(
+                f"[VideoDownloader] Download completed: task_id={task_id}, "
+                f"status: DOWNLOADING→TRANSCRIBING, video={video_path}"
+            )
+
+            from ..db import TaskStatus
+            from ..task_updater import update_and_notify
+            updates: Dict[str, Any] = {"status": TaskStatus.TRANSCRIBING}
+            info = info_dict or {}
+            video_title = info.get("title")
+            if info.get("_type") == "playlist" and not video_title:
+                entries = info.get("entries") or []
+                if entries and isinstance(entries[0], dict):
+                    video_title = entries[0].get("title")
+            if video_title:
+                updates["title"] = str(video_title)
+            self._submit_coro(update_and_notify(task_id, updates))
+
+        if self.next_worker:
+            next_payload = payload.copy()
+            next_payload["video_file"] = video_path
+            if task_id:
+                next_payload["audio_file"] = os.path.join(self.output_dir, f"{task_id}_audio.mp3")
+                next_payload["output_file"] = os.path.join(self.output_dir, f"{task_id}_summary.md")
+            else:
+                base_name = os.path.splitext(os.path.basename(video_path))[0]
+                next_payload["audio_file"] = os.path.join(self.output_dir, f"{base_name}.mp3")
+                next_payload["output_file"] = os.path.join(self.output_dir, f"{base_name}_summary.md")
+            self._submit_coro(self.next_worker.add_task(next_payload))
+
+    async def _resolve_and_save_bilibili_author(
+        self, task_id: str, video_url: str, sessdata: str = ""
+    ):
         if not task_id or not self._is_bilibili_url(video_url):
             return
 
         try:
-            author_info = await resolve_bilibili_author(video_url)
+            author_info = await resolve_bilibili_author(video_url, sessdata=sessdata)
             from ..task_updater import update_and_notify
 
             await update_and_notify(
@@ -635,6 +880,17 @@ class VideoDownloaderWorker(Worker):
 
         logger.info(f"[{self.name}] 开始下载视频: {video_url} (质量: {quality})")
 
+        bilibili_sessdata = ""
+        bilibili_cookie_source = "none"
+        if self._is_bilibili_url(str(video_url)):
+            bilibili_sessdata, bilibili_cookie_source = self._resolve_bilibili_sessdata(
+                payload if isinstance(payload, dict) else {}
+            )
+            logger.info(
+                f"[{self.name}] B 站下载鉴权: cookie_source={bilibili_cookie_source}, "
+                f"has_cookie={bool(bilibili_sessdata)}"
+            )
+
         if task_id:
             from ..db import TaskStatus
             from ..task_updater import update_and_notify
@@ -666,7 +922,34 @@ class VideoDownloaderWorker(Worker):
         try:
             # 配置 ffmpeg 路径（使用 FFmpegHelper）
             ffmpeg_location = FFmpegHelper.get_yt_dlp_ffmpeg_location()
-            
+
+            playlist_items = None
+            if self._is_bilibili_url(str(video_url)) and isinstance(payload, dict):
+                playlist_items = self._playlist_items_from_payload(payload)
+
+            # B 站本地缓存命中：跳过网络下载
+            if self._is_bilibili_url(str(video_url)):
+                cached_paths = self._try_resolve_bilibili_cache_paths(
+                    str(video_url), playlist_items
+                )
+                if cached_paths:
+                    logger.info(
+                        f"[{self.name}] 命中本地缓存 ({len(cached_paths)} 个文件)，跳过下载: "
+                        + ", ".join(os.path.basename(p) for p in cached_paths[:5])
+                        + ("..." if len(cached_paths) > 5 else "")
+                    )
+                    video_path = self._finalize_paths_to_video(cached_paths, task_id)
+                    logger.info(f"[{self.name}] 视频缓存就绪: {video_path}")
+                    self._dispatch_after_download(
+                        payload if isinstance(payload, dict) else {},
+                        str(video_url),
+                        video_path,
+                        {"title": None, "_cached": True},
+                        task_id,
+                        bilibili_sessdata,
+                    )
+                    return
+
             if quality == "audio_only":
                 ydl_opts = {
                     'outtmpl': os.path.join(self.output_dir, '%(id)s.%(ext)s'),
@@ -674,6 +957,7 @@ class VideoDownloaderWorker(Worker):
                     'progress_hooks': [progress_hook],
                     'writethumbnail': False,
                     'writesubtitles': False,
+                    'overwrites': False,
                 }
             else:
                 ydl_opts = {
@@ -681,46 +965,32 @@ class VideoDownloaderWorker(Worker):
                     'format': 'worstvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/worst[ext=mp4]/best',
                     'merge_output_format': 'mp4',
                     'progress_hooks': [progress_hook],
+                    'overwrites': False,
                 }
             
             # 如果有 ffmpeg 路径，添加到配置中
             if ffmpeg_location:
                 ydl_opts['ffmpeg_location'] = ffmpeg_location
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(video_url, download=True)
-                video_path = ydl.prepare_filename(info_dict)
+            if playlist_items:
+                ydl_opts["playlist_items"] = playlist_items
+                logger.info(f"[{self.name}] 仅下载分P: {playlist_items}")
+
+            auth_sessdata = bilibili_sessdata if self._is_bilibili_url(str(video_url)) else ""
+            with bilibili_ydl_auth_context(ydl_opts, auth_sessdata, cookie_dir=self.output_dir):
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(video_url, download=True)
+                    video_path = self._resolve_download_output_path(ydl, info_dict, task_id)
 
             logger.info(f"[{self.name}] 视频下载成功: {video_path}")
-
-            if task_id and self.is_task_cancelled(task_id):
-                raise TaskCancelledError(f"任务已取消，停止后续处理: {task_id}")
-
-            if task_id and self._is_bilibili_url(str(video_url)):
-                self._submit_coro(self._resolve_and_save_bilibili_author(task_id, str(video_url)))
-
-            if task_id:
-                logger.info(
-                    f"[VideoDownloader] Download completed: task_id={task_id}, "
-                    f"status: DOWNLOADING→TRANSCRIBING, video={video_path}"
-                )
-
-                from ..db import TaskStatus
-                from ..task_updater import update_and_notify
-                updates = {"status": TaskStatus.TRANSCRIBING}
-                video_title = info_dict.get("title")
-                if video_title:
-                    updates["title"] = str(video_title)
-                self._submit_coro(update_and_notify(task_id, updates))
-
-            if self.next_worker:
-                next_payload = payload.copy()
-                next_payload['video_file'] = video_path
-                base_name = os.path.splitext(os.path.basename(video_path))[0]
-                next_payload['audio_file'] = os.path.join(self.output_dir, f"{base_name}.mp3")
-                next_payload['output_file'] = os.path.join(self.output_dir, f"{base_name}_summary.md")
-                
-                self._submit_coro(self.next_worker.add_task(next_payload))
+            self._dispatch_after_download(
+                payload if isinstance(payload, dict) else {},
+                str(video_url),
+                video_path,
+                info_dict,
+                task_id,
+                bilibili_sessdata,
+            )
 
         except TaskCancelledError as e:
             logger.info(f"[{self.name}] {e}")

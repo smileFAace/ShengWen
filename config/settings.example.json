@@ -12,15 +12,17 @@
     "model_path": null,
     "model_size": "tiny",
     "device": "cpu",
+    "compute_type_mode": "auto",
+    "compute_type": "int8",
     "enable_bilibili_subtitle_fetch": true,
     "bilibili_sessdata": "",
     "faster_whisper_model_path": null
   },
   "llm": {
-    "active_profile_id": "ff831a93",
+    "active_profile_id": "b3d7a08e",
     "profiles": [
       {
-        "id": "ff831a93",
+        "id": "b3d7a08e",
         "name": "OpenAI 兼容接口",
         "provider": "openai_compatible",
         "base_url": "https://api.openai.com/v1",

@@ -5,6 +5,7 @@ import yt_dlp
 
 from ..worker import Worker
 from ..utils.logger import logger
+from .bilibili_yt_dlp import bilibili_ydl_auth_context, sanitize_sessdata
 
 
 class BilibiliInfoWorker(Worker):
@@ -12,7 +13,7 @@ class BilibiliInfoWorker(Worker):
     一个工作单元，用于获取B站视频的元信息（封面、时长、标题等）。
     不下载视频，只提取信息。
     """
-    
+
     def __init__(self, name: str, next_worker: Worker = None):
         super().__init__(name)
         self.next_worker = next_worker
@@ -20,7 +21,7 @@ class BilibiliInfoWorker(Worker):
     async def process_task(self, payload: Any):
         """
         获取B站视频信息并将其传递给下一个工作单元。
-        
+
         :param payload: 包含 'video_url' 的字典。
         """
         video_url = payload.get("video_url")
@@ -38,47 +39,47 @@ class BilibiliInfoWorker(Worker):
         logger.info(f"[{self.name}] 开始获取视频信息: {video_url}")
 
         try:
-            # 配置 yt-dlp 只提取信息，不下载
+            sessdata = sanitize_sessdata(str(payload.get("bilibili_sessdata") or ""))
+            if not sessdata:
+                sessdata = sanitize_sessdata(os.getenv("BILIBILI_SESSDATA") or os.getenv("SESSDATA"))
             ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,  # 获取完整信息
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": False,
             }
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # 只提取信息，不下载
-                info_dict = ydl.extract_info(video_url, download=False)
-                
-                # 提取关键信息
-                video_info = {
-                    'title': info_dict.get('title', '未知标题'),
-                    'duration': info_dict.get('duration', 0),  # 秒
-                    'duration_string': self._format_duration(info_dict.get('duration', 0)),
-                    'thumbnail': info_dict.get('thumbnail', ''),
-                    'description': info_dict.get('description', ''),
-                    'uploader': info_dict.get('uploader', '未知UP主'),
-                    'upload_date': info_dict.get('upload_date', ''),
-                    'view_count': info_dict.get('view_count', 0),
-                    'like_count': info_dict.get('like_count', 0),
-                    'video_id': info_dict.get('id', ''),
-                    'webpage_url': info_dict.get('webpage_url', video_url),
-                    'formats_count': len(info_dict.get('formats', [])),
-                }
+            with bilibili_ydl_auth_context(ydl_opts, sessdata):
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(video_url, download=False)
 
-                logger.info(f"[{self.name}] 视频信息获取成功:")
-                logger.info(f"  标题: {video_info['title']}")
-                logger.info(f"  时长: {video_info['duration_string']} ({video_info['duration']}秒)")
-                logger.info(f"  UP主: {video_info['uploader']}")
-                logger.info(f"  播放量: {video_info['view_count']}")
-                logger.info(f"  点赞数: {video_info['like_count']}")
-                logger.info(f"  封面URL: {video_info['thumbnail']}")
-                logger.info(f"  可用格式数: {video_info['formats_count']}")
+            video_info = {
+                "title": info_dict.get("title", "未知标题"),
+                "duration": info_dict.get("duration", 0),
+                "duration_string": self._format_duration(info_dict.get("duration", 0)),
+                "thumbnail": info_dict.get("thumbnail", ""),
+                "description": info_dict.get("description", ""),
+                "uploader": info_dict.get("uploader", "未知UP主"),
+                "upload_date": info_dict.get("upload_date", ""),
+                "view_count": info_dict.get("view_count", 0),
+                "like_count": info_dict.get("like_count", 0),
+                "video_id": info_dict.get("id", ""),
+                "webpage_url": info_dict.get("webpage_url", video_url),
+                "formats_count": len(info_dict.get("formats", [])),
+            }
 
-                # 将视频信息添加到payload中
-                if self.next_worker:
-                    next_payload = payload.copy()
-                    next_payload['video_info'] = video_info
-                    await self.next_worker.add_task(next_payload)
+            logger.info(f"[{self.name}] 视频信息获取成功:")
+            logger.info(f"  标题: {video_info['title']}")
+            logger.info(f"  时长: {video_info['duration_string']} ({video_info['duration']}秒)")
+            logger.info(f"  UP主: {video_info['uploader']}")
+            logger.info(f"  播放量: {video_info['view_count']}")
+            logger.info(f"  点赞数: {video_info['like_count']}")
+            logger.info(f"  封面URL: {video_info['thumbnail']}")
+            logger.info(f"  可用格式数: {video_info['formats_count']}")
+
+            if self.next_worker:
+                next_payload = payload.copy()
+                next_payload["video_info"] = video_info
+                await self.next_worker.add_task(next_payload)
 
         except Exception as e:
             logger.error(f"[{self.name}] 获取视频信息时出错: {e}", exc_info=True)
@@ -88,23 +89,14 @@ class BilibiliInfoWorker(Worker):
                 asyncio.create_task(update_and_notify(task_id, {"status": TaskStatus.FAILED, "error_message": str(e)}))
 
     def _format_duration(self, seconds: float) -> str:
-        """
-        将秒数格式化为 HH:MM:SS 或 MM:SS 格式。
-        
-        :param seconds: 总秒数（可以是浮点数）
-        :return: 格式化的时长字符串
-        """
         if seconds <= 0:
             return "00:00"
-        
-        # 转换为整数
+
         seconds = int(seconds)
-        
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
         secs = seconds % 60
-        
+
         if hours > 0:
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-        else:
-            return f"{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"

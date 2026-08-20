@@ -231,6 +231,10 @@ class TranscriptionSettings(BaseModel):
     model_source: str
     model_size: str
     model_path: str
+    compute_type_mode: str
+    compute_type: str
+    manual_compute_type: str
+    available_compute_types: List[str]
     model_path_valid: bool
     model_path_message: str
     model_path_resolved: str
@@ -255,6 +259,8 @@ class TranscriptionSettingsUpdate(BaseModel):
     model_source: Optional[str] = Field(default=None, description="auto_download 或 manual_path")
     model_size: Optional[str] = Field(default=None, description="tiny/base/small/medium/large")
     model_path: Optional[str] = Field(default=None, description="手动模型目录路径")
+    compute_type_mode: Optional[str] = Field(default=None, description="auto 或 manual")
+    compute_type: Optional[str] = Field(default=None, description="int8/float16/float32/bfloat16")
     enable_bilibili_subtitle_fetch: Optional[bool] = Field(
         default=None,
         description="是否优先尝试直取 B 站字幕（失败时回退 ASR）"
@@ -512,6 +518,8 @@ transcription_settings_manager = TranscriptionSettingsManager(
     model_source=str(whisper_cfg.model_source),
     model_size=whisper_cfg.model_size,
     model_path=whisper_cfg.configured_model_path,
+    initial_compute_type_mode=str(whisper_cfg.compute_type_mode),
+    initial_compute_type=str(whisper_cfg.compute_type),
     initial_enable_bilibili_subtitle_fetch=initial_enable_bilibili_subtitle_fetch,
     initial_bilibili_sessdata=initial_bilibili_sessdata,
 )
@@ -683,7 +691,12 @@ def _normalize_summary_mode(raw_value: str | None, fallback: str | None = None) 
 async def _try_resolve_and_persist_author(task_id: str, video_url: str) -> bool:
     try:
         from .task_updater import update_and_notify
-        author_info = await resolve_bilibili_author(video_url)
+        sessdata = ""
+        try:
+            sessdata, _source = transcription_settings_manager.resolve_bilibili_sessdata()
+        except Exception as cookie_err:
+            logger.info(f"[AuthorResolver] 读取 B 站 Cookie 失败，将无 Cookie 解析: {cookie_err}")
+        author_info = await resolve_bilibili_author(video_url, sessdata=sessdata)
         await update_and_notify(
             task_id,
             {
@@ -1410,6 +1423,9 @@ async def delete_task(task_id: str):
     if cancellation_reports:
         logger.info(f"[delete_task] 任务 {task_id} 取消结果: " + ", ".join(cancellation_reports))
 
+    from .utils.task_temp_files import cleanup_task_temp_files
+    cleanup_task_temp_files(task_id)
+
     db.delete_task(task_id)
     return None
 
@@ -1764,6 +1780,8 @@ async def update_transcription_settings(payload: TranscriptionSettingsUpdate):
             model_source=payload.model_source,
             model_size=payload.model_size,
             model_path=payload.model_path,
+            compute_type_mode=payload.compute_type_mode,
+            compute_type=payload.compute_type,
             enable_bilibili_subtitle_fetch=payload.enable_bilibili_subtitle_fetch,
             bilibili_sessdata=payload.bilibili_sessdata,
             clear_bilibili_sessdata=payload.clear_bilibili_sessdata,

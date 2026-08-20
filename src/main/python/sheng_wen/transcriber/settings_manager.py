@@ -210,6 +210,12 @@ def _mask_cookie_value(value: str) -> str:
 
 VALID_MODEL_SIZES = {"tiny", "base", "small", "medium", "large"}
 VALID_MODEL_SOURCES = {"auto_download", "manual_path"}
+VALID_COMPUTE_TYPE_MODES = {"auto", "manual"}
+VALID_COMPUTE_TYPES = {"int8", "float16", "float32", "bfloat16"}
+VALID_COMPUTE_TYPES_BY_DEVICE = {
+    "cpu": {"int8", "float32"},
+    "cuda": VALID_COMPUTE_TYPES,
+}
 REQUIRED_MANUAL_MODEL_FILES = (
     "config.json",
     "model.bin",
@@ -232,6 +238,20 @@ def _normalize_model_size(value: str | None, fallback: str = "tiny") -> str:
 def _normalize_model_source(value: str | None, fallback: str = "auto_download") -> str:
     normalized = str(value or "").strip().lower()
     if normalized in VALID_MODEL_SOURCES:
+        return normalized
+    return fallback
+
+
+def _normalize_compute_type_mode(value: str | None, fallback: str = "auto") -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in VALID_COMPUTE_TYPE_MODES:
+        return normalized
+    return fallback
+
+
+def _normalize_compute_type(value: str | None, fallback: str = "int8") -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in VALID_COMPUTE_TYPES:
         return normalized
     return fallback
 
@@ -265,6 +285,8 @@ class TranscriptionSettingsManager:
         model_size: str,
         model_source: str = "auto_download",
         model_path: str | None = None,
+        initial_compute_type_mode: str = "auto",
+        initial_compute_type: str = "int8",
         initial_enable_bilibili_subtitle_fetch: bool = True,
         initial_bilibili_sessdata: str = "",
     ):
@@ -273,6 +295,8 @@ class TranscriptionSettingsManager:
         self._model_size = _normalize_model_size(model_size, fallback="tiny")
         self._model_source = _normalize_model_source(model_source, fallback="auto_download")
         self._model_path = _sanitize_model_path(model_path)
+        self._compute_type_mode = _normalize_compute_type_mode(initial_compute_type_mode, fallback="auto")
+        self._compute_type = _normalize_compute_type(initial_compute_type, fallback="int8")
         if self._model_source == "auto_download" and self._model_path:
             # 兼容旧配置：曾填写过 model_path 时默认沿用手动模式。
             self._model_source = "manual_path"
@@ -307,6 +331,8 @@ class TranscriptionSettingsManager:
             model_source = self._model_source
             model_size = self._model_size
             model_path = self._model_path
+            compute_type_mode = self._compute_type_mode
+            manual_compute_type = self._compute_type
 
         sessdata, source = self.resolve_bilibili_sessdata()
         cuda_diag = _detect_cuda_support()
@@ -322,11 +348,22 @@ class TranscriptionSettingsManager:
             else "自动下载模式：首次使用会自动下载/加载所选模型。"
         )
 
+        effective_compute_type = self._resolve_compute_type(
+            device=current_device,
+            compute_type_mode=compute_type_mode,
+            compute_type=manual_compute_type,
+        )
+        available_compute_types = sorted(VALID_COMPUTE_TYPES_BY_DEVICE.get(current_device, {"int8"}))
+
         return {
             "device": current_device,
             "model_source": model_source,
             "model_size": model_size,
             "model_path": model_path,
+            "compute_type_mode": compute_type_mode,
+            "compute_type": effective_compute_type,
+            "manual_compute_type": manual_compute_type,
+            "available_compute_types": available_compute_types,
             "model_path_valid": model_path_valid,
             "model_path_message": model_path_message,
             "model_path_resolved": manual_resolved_path if model_source == "manual_path" else "",
@@ -352,8 +389,15 @@ class TranscriptionSettingsManager:
         model_source: str,
         model_size: str,
         model_path: str,
+        compute_type_mode: str,
+        compute_type: str,
     ) -> dict[str, str]:
-        kwargs: dict[str, str] = {"device": device}
+        resolved_compute_type = self._resolve_compute_type(
+            device=device,
+            compute_type_mode=compute_type_mode,
+            compute_type=compute_type,
+        )
+        kwargs: dict[str, str] = {"device": device, "compute_type": resolved_compute_type}
         if model_source == "manual_path":
             valid, message, resolved_path = _validate_manual_model_dir(model_path)
             if not valid:
@@ -370,7 +414,25 @@ class TranscriptionSettingsManager:
                 model_source=self._model_source,
                 model_size=self._model_size,
                 model_path=self._model_path,
+                compute_type_mode=self._compute_type_mode,
+                compute_type=self._compute_type,
             )
+
+    @staticmethod
+    def _resolve_compute_type(device: str, compute_type_mode: str, compute_type: str) -> str:
+        if device == "cuda":
+            auto_compute_type = "float32"
+        else:
+            auto_compute_type = "int8"
+
+        if compute_type_mode == "auto":
+            return auto_compute_type
+
+        normalized_manual = _normalize_compute_type(compute_type, fallback=auto_compute_type)
+        supported_for_device = VALID_COMPUTE_TYPES_BY_DEVICE.get(device, {auto_compute_type})
+        if normalized_manual not in supported_for_device:
+            return auto_compute_type
+        return normalized_manual
 
     def update_settings(
         self,
@@ -378,6 +440,8 @@ class TranscriptionSettingsManager:
         model_source: Literal["auto_download", "manual_path"] | str | None = None,
         model_size: Literal["tiny", "base", "small", "medium", "large"] | str | None = None,
         model_path: str | None = None,
+        compute_type_mode: Literal["auto", "manual"] | str | None = None,
+        compute_type: Literal["int8", "float16", "float32", "bfloat16"] | str | None = None,
         enable_bilibili_subtitle_fetch: bool | None = None,
         bilibili_sessdata: str | None = None,
         clear_bilibili_sessdata: bool | None = None,
@@ -387,6 +451,8 @@ class TranscriptionSettingsManager:
             and model_source is None
             and model_size is None
             and model_path is None
+            and compute_type_mode is None
+            and compute_type is None
             and enable_bilibili_subtitle_fetch is None
             and bilibili_sessdata is None
             and clear_bilibili_sessdata is None
@@ -398,6 +464,8 @@ class TranscriptionSettingsManager:
             current_model_source = self._model_source
             current_model_size = self._model_size
             current_model_path = self._model_path
+            current_compute_type_mode = self._compute_type_mode
+            current_compute_type = self._compute_type
             worker_for_rebuild = self._transcriber_worker
 
         next_device = current_device
@@ -424,6 +492,20 @@ class TranscriptionSettingsManager:
         if model_path is not None:
             next_model_path = _sanitize_model_path(model_path)
 
+        next_compute_type_mode = current_compute_type_mode
+        if compute_type_mode is not None:
+            normalized_mode = _normalize_compute_type_mode(compute_type_mode, fallback="")
+            if normalized_mode not in VALID_COMPUTE_TYPE_MODES:
+                raise ValueError("compute_type_mode 仅支持 auto 或 manual")
+            next_compute_type_mode = normalized_mode
+
+        next_compute_type = current_compute_type
+        if compute_type is not None:
+            normalized_compute_type = _normalize_compute_type(compute_type, fallback="")
+            if normalized_compute_type not in VALID_COMPUTE_TYPES:
+                raise ValueError("compute_type 仅支持 int8/float16/float32/bfloat16")
+            next_compute_type = normalized_compute_type
+
         if next_device == "cuda":
             cuda_diag = _detect_cuda_support()
             if not bool(cuda_diag["cuda_available"]):
@@ -438,11 +520,15 @@ class TranscriptionSettingsManager:
         model_source_changed = next_model_source != current_model_source
         model_size_changed = next_model_size != current_model_size
         model_path_changed = next_model_path != current_model_path
+        compute_type_mode_changed = next_compute_type_mode != current_compute_type_mode
+        compute_type_changed = next_compute_type != current_compute_type
         should_rebuild = bool(worker_for_rebuild) and (
             device_changed
             or model_source_changed
             or model_size_changed
             or model_path_changed
+            or compute_type_mode_changed
+            or compute_type_changed
         )
 
         transcriber = None
@@ -456,6 +542,8 @@ class TranscriptionSettingsManager:
                     model_source=next_model_source,
                     model_size=next_model_size,
                     model_path=next_model_path,
+                    compute_type_mode=next_compute_type_mode,
+                    compute_type=next_compute_type,
                 )
                 transcriber = get_transcriber("fast_whisper", **transcriber_kwargs)
                 logger.info("[TranscriptionSettingsManager] 转录器实例重建完成。")
@@ -467,20 +555,33 @@ class TranscriptionSettingsManager:
             self._model_source = next_model_source
             self._model_size = next_model_size
             self._model_path = next_model_path
+            self._compute_type_mode = next_compute_type_mode
+            self._compute_type = next_compute_type
 
             if transcriber is not None and self._transcriber_worker is not None:
                 self._transcriber_worker.update_transcriber(transcriber)
                 logger.info(
                     "[TranscriptionSettingsManager] 已更新转录配置: "
-                    f"device={self._device}, model_source={self._model_source}, model_size={self._model_size}"
+                    f"device={self._device}, model_source={self._model_source}, "
+                    f"model_size={self._model_size}, compute_type_mode={self._compute_type_mode}, "
+                    f"compute_type={self._compute_type}"
                 )
             elif (
-                (device_changed or model_source_changed or model_size_changed or model_path_changed)
+                (
+                    device_changed
+                    or model_source_changed
+                    or model_size_changed
+                    or model_path_changed
+                    or compute_type_mode_changed
+                    or compute_type_changed
+                )
                 and self._transcriber_worker is None
             ):
                 logger.info(
                     "[TranscriptionSettingsManager] 已保存转录配置（worker 尚未初始化，将在首次任务时生效）: "
-                    f"device={self._device}, model_source={self._model_source}, model_size={self._model_size}"
+                    f"device={self._device}, model_source={self._model_source}, "
+                    f"model_size={self._model_size}, compute_type_mode={self._compute_type_mode}, "
+                    f"compute_type={self._compute_type}"
                 )
 
             if enable_bilibili_subtitle_fetch is not None:
@@ -537,6 +638,8 @@ class TranscriptionSettingsManager:
                 "model_source": self._model_source,
                 "model_size": self._model_size,
                 "model_path": self._model_path,
+                "compute_type_mode": self._compute_type_mode,
+                "compute_type": self._compute_type,
                 "enable_bilibili_subtitle_fetch": self._enable_bilibili_subtitle_fetch,
                 "bilibili_sessdata": self._bilibili_sessdata,
             }

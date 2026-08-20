@@ -489,6 +489,8 @@ const handleUpdateTranscriptionSettings = async (payload: {
   model_source?: 'auto_download' | 'manual_path'
   model_size?: 'tiny' | 'base' | 'small' | 'medium' | 'large'
   model_path?: string
+  compute_type_mode?: 'auto' | 'manual'
+  compute_type?: 'int8' | 'float16' | 'float32' | 'bfloat16'
   enable_bilibili_subtitle_fetch?: boolean
   bilibili_sessdata?: string
   clear_bilibili_sessdata?: boolean
@@ -838,6 +840,7 @@ watch(
       :isUpdatingLlmSettings="isUpdatingLlmSettings"
       :isTestingLlm="isTestingLlm"
       :isSwitchingProfile="isSwitchingProfile"
+      :isPrewarming="isPrewarming"
       :transcriptionSettings="transcriptionSettings"
       :isUpdatingTranscriptionSettings="isUpdatingTranscriptionSettings"
       :summarizationSettings="summarizationSettings"

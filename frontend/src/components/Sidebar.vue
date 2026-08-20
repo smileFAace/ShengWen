@@ -113,6 +113,8 @@ const emit = defineEmits<{
     model_source?: 'auto_download' | 'manual_path'
     model_size?: 'tiny' | 'base' | 'small' | 'medium' | 'large'
     model_path?: string
+    compute_type_mode?: 'auto' | 'manual'
+    compute_type?: 'int8' | 'float16' | 'float32' | 'bfloat16'
     enable_bilibili_subtitle_fetch?: boolean
     bilibili_sessdata?: string
     clear_bilibili_sessdata?: boolean
@@ -155,6 +157,8 @@ const transcriptionDevice = ref<'cpu' | 'cuda'>('cpu')
 const transcriptionModelSource = ref<'auto_download' | 'manual_path'>('auto_download')
 const transcriptionModelSize = ref<'tiny' | 'base' | 'small' | 'medium' | 'large'>('tiny')
 const transcriptionModelPathInput = ref('')
+const transcriptionComputeTypeMode = ref<'auto' | 'manual'>('auto')
+const transcriptionComputeType = ref<'int8' | 'float16' | 'float32' | 'bfloat16'>('int8')
 const enableBilibiliSubtitleFetch = ref(true)
 const globalBilibiliSessdataInput = ref('')
 const chunkTargetDurationSec = ref(20)
@@ -321,6 +325,8 @@ const syncTranscriptionSettings = (settings: TranscriptionSettings | null) => {
   transcriptionModelSource.value = settings.model_source
   transcriptionModelSize.value = settings.model_size
   transcriptionModelPathInput.value = settings.model_path
+  transcriptionComputeTypeMode.value = settings.compute_type_mode || 'auto'
+  transcriptionComputeType.value = settings.manual_compute_type || settings.compute_type || 'int8'
   enableBilibiliSubtitleFetch.value = settings.enable_bilibili_subtitle_fetch
 }
 
@@ -382,6 +388,8 @@ const submitTranscriptionSettings = () => {
     model_source?: 'auto_download' | 'manual_path'
     model_size?: 'tiny' | 'base' | 'small' | 'medium' | 'large'
     model_path?: string
+    compute_type_mode?: 'auto' | 'manual'
+    compute_type?: 'int8' | 'float16' | 'float32' | 'bfloat16'
     enable_bilibili_subtitle_fetch?: boolean
     bilibili_sessdata?: string
   } = {
@@ -389,6 +397,8 @@ const submitTranscriptionSettings = () => {
     model_source: transcriptionModelSource.value,
     model_size: transcriptionModelSize.value,
     model_path: transcriptionModelPathInput.value.trim(),
+    compute_type_mode: transcriptionComputeTypeMode.value,
+    compute_type: transcriptionComputeType.value,
     enable_bilibili_subtitle_fetch: enableBilibiliSubtitleFetch.value
   }
   const cookie = globalBilibiliSessdataInput.value.trim()
@@ -871,6 +881,48 @@ watch(() => props.summarizationSettings, (settings) => {
                 >
                   CUDA 转录
                 </button>
+
+                <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-3 space-y-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <p class="text-sm font-medium text-slate-700">计算精度策略</p>
+                    <span class="text-[10px] px-2 py-0.5 rounded-full border border-slate-200 bg-white text-slate-500">
+                      生效: {{ props.transcriptionSettings?.compute_type || 'int8' }}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <button
+                      @click="transcriptionComputeTypeMode = 'auto'"
+                      :class="[
+                        'px-3 py-2 rounded-lg border text-xs text-left transition-colors',
+                        transcriptionComputeTypeMode === 'auto'
+                          ? 'border-primary/40 bg-blue-50 text-slate-800'
+                          : 'border-gray-200 bg-white text-slate-600 hover:bg-gray-100'
+                      ]"
+                    >
+                      自动
+                    </button>
+                    <button
+                      @click="transcriptionComputeTypeMode = 'manual'"
+                      :class="[
+                        'px-3 py-2 rounded-lg border text-xs text-left transition-colors',
+                        transcriptionComputeTypeMode === 'manual'
+                          ? 'border-primary/40 bg-blue-50 text-slate-800'
+                          : 'border-gray-200 bg-white text-slate-600 hover:bg-gray-100'
+                      ]"
+                    >
+                      手动
+                    </button>
+                  </div>
+                  <select
+                    v-model="transcriptionComputeType"
+                    :disabled="transcriptionComputeTypeMode !== 'manual'"
+                    class="w-full px-2.5 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-60"
+                  >
+                    <option v-for="option in (props.transcriptionSettings?.available_compute_types || ['int8'])" :key="option" :value="option">
+                      {{ option }}
+                    </option>
+                  </select>
+                </div>
 
                 <div class="rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-3 space-y-2.5">
                   <div class="flex items-center justify-between gap-2">

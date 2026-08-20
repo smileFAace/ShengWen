@@ -55,7 +55,8 @@ def _build_actionable_transcription_error(error_text: str) -> str:
     lines.extend(
         [
             "3) 确认 PATH 包含 CUDA bin 目录（例如 C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.x\\bin）。",
-            "4) 重启 ShengWen 后重新选择 CUDA。",
+            "4) 计算精度建议使用 FP32；不要使用 FP16 / BF16。",
+            "5) 重启 ShengWen 后重新选择 CUDA。",
         ]
     )
     return "\n".join(lines)
