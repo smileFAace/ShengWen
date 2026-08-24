@@ -8,6 +8,12 @@ AUDIO_MEDIA_EXTENSIONS = {
 }
 SUPPORTED_MEDIA_EXTENSIONS = VIDEO_MEDIA_EXTENSIONS | AUDIO_MEDIA_EXTENSIONS
 
+# 字幕/文稿文件（直接解析为转录文本，跳过语音识别）
+SUBTITLE_TEXT_EXTENSIONS = {".srt", ".vtt", ".ass", ".ssa", ".txt"}
+
+# 上传接口可接受的完整扩展名集合
+SUPPORTED_UPLOAD_EXTENSIONS = SUPPORTED_MEDIA_EXTENSIONS | SUBTITLE_TEXT_EXTENSIONS
+
 
 def get_media_extension(file_path_or_name: str) -> str:
     return os.path.splitext(file_path_or_name)[1].lower()
@@ -15,6 +21,11 @@ def get_media_extension(file_path_or_name: str) -> str:
 
 def is_audio_media(file_path_or_name: str) -> bool:
     return get_media_extension(file_path_or_name) in AUDIO_MEDIA_EXTENSIONS
+
+
+def is_subtitle_text_file(file_path_or_name: str) -> bool:
+    """判断是否为字幕/文稿文件（无需语音识别，直接解析文本）。"""
+    return get_media_extension(file_path_or_name) in SUBTITLE_TEXT_EXTENSIONS
 
 
 def build_transcriber_payload(

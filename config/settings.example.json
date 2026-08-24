@@ -19,10 +19,10 @@
     "faster_whisper_model_path": null
   },
   "llm": {
-    "active_profile_id": "b3d7a08e",
+    "active_profile_id": "fcbc7db4",
     "profiles": [
       {
-        "id": "b3d7a08e",
+        "id": "fcbc7db4",
         "name": "OpenAI 兼容接口",
         "provider": "openai_compatible",
         "base_url": "https://api.openai.com/v1",

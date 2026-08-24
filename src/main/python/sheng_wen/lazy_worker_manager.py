@@ -79,7 +79,8 @@ class LazyWorkerManager:
                 )
                 self._file_upload_worker = FileUploadWorker(
                     name="FileUploadWorker",
-                    next_worker=self._transcriber_worker
+                    next_worker=self._transcriber_worker,
+                    summary_worker=self._llm_worker,
                 )
                 logger.info("--- [LazyInit] 3/5 Worker 实例创建完成 ---")
 

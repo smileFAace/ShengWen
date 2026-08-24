@@ -976,6 +976,44 @@ export function useTaskViewModel() {
         throw err
       }
     },
+    updateTaskSummary: async (taskId: string, newSummary: string) => {
+      try {
+        const response = await axios.patch(`${apiBaseUrl}/tasks/${taskId}`, { summary: newSummary })
+        // 直接更新本地选中任务，避免等待 WS 广播
+        if (selectedTask.value?.id === taskId) {
+          selectedTask.value = response.data
+        }
+        return response.data
+      } catch (err) {
+        console.error('Failed to update task summary:', err)
+        error.value = '保存总结失败'
+        throw err
+      }
+    },
+    openTaskLocal: async (taskId: string) => {
+      try {
+        const response = await axios.post(`${apiBaseUrl}/tasks/${taskId}/open-local`)
+        return response.data as { success: boolean; file_path: string }
+      } catch (err) {
+        console.error('Failed to open task local file:', err)
+        error.value = getAxiosErrorMessage(err, '打开本地文件失败')
+        throw err
+      }
+    },
+    reloadTaskLocal: async (taskId: string) => {
+      try {
+        const response = await axios.post(`${apiBaseUrl}/tasks/${taskId}/reload-local`)
+        // 直接更新本地选中任务，使页面立即反映本地修改
+        if (selectedTask.value?.id === taskId) {
+          selectedTask.value = response.data
+        }
+        return response.data
+      } catch (err) {
+        console.error('Failed to reload task local file:', err)
+        error.value = getAxiosErrorMessage(err, '重新载入本地文件失败')
+        throw err
+      }
+    },
 
     // --- Multi-select & Batch Operations ---
     toggleMultiSelectMode: () => {

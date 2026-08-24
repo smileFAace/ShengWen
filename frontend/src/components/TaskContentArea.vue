@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { PhXCircle } from '@phosphor-icons/vue'
+import { PhXCircle, PhPencilSimple, PhCheck, PhX, PhArrowSquareOut, PhArrowCounterClockwise } from '@phosphor-icons/vue'
 import { computed, watch, nextTick, ref, onBeforeUnmount } from 'vue'
 import type { Task, MarkdownHeadingItem } from '../types'
 import { TaskStatus } from '../types'
 import { Incremark } from '@incremark/vue'
+import { marked } from 'marked'
 import TaskMetaCard from './TaskMetaCard.vue'
-import { countWords } from '../utils/formatters'
+import { countWords, stripDoubleBracePlaceholders } from '../utils/formatters'
+import { postProcessCompiledMarkdown } from '../utils/markdownPostProcessor'
 import { normalizeAccidentalInlineCodeBlocks } from '../utils/markdownNormalizer'
 import { normalizeMermaidSvgLayout } from '../utils/mermaidLayout'
 import { useMarkdownTheme } from '../composables/useMarkdownTheme'
@@ -27,6 +29,9 @@ interface Props {
   topic: string
   isEditingTopic: boolean
   editingTopicValue: string
+  isEditingSummary: boolean
+  editingSummaryValue: string
+  isSavingSummary: boolean
   isStreamingSummary: boolean
   streamingBlocks: any[]
   compiledResumeSummary: string
@@ -40,6 +45,12 @@ const emit = defineEmits<{
   'save-topic': []
   'cancel-edit-topic': []
   'update:editing-topic-value': [value: string]
+  'start-edit-summary': []
+  'save-summary': []
+  'cancel-edit-summary': []
+  'update:editing-summary-value': [value: string]
+  'open-local': []
+  'reload-local': []
   'update-markdown-headings': [headings: MarkdownHeadingItem[]]
   'update-active-heading-id': [headingId: string]
 }>()
@@ -49,6 +60,7 @@ const isFailed = computed(() => props.task.status === TaskStatus.FAILED)
 const isLoading = computed(() => !isCompleted.value && !isFailed.value)
 const contentScrollRef = ref<HTMLElement | null>(null)
 const summaryArticleRef = ref<HTMLElement | null>(null)
+const summaryEditorRef = ref<HTMLTextAreaElement | null>(null)
 const SUMMARY_HIGHLIGHT_CLASS = 'summary-search-highlight'
 const mermaidRenderVersion = ref(0)
 const markdownHeadings = ref<MarkdownHeadingItem[]>([])
@@ -62,6 +74,16 @@ const { currentThemeId } = useMarkdownTheme()
 const summaryWordCount = computed(() => {
   if (!props.task.summary) return 0
   return countWords(props.task.summary)
+})
+
+// 双栏编辑模式的实时预览（基于编辑中的内容渲染，未保存不影响正式展示）
+const editingPreviewHtml = computed(() => {
+  if (!props.editingSummaryValue) return ''
+  const cleaned = stripDoubleBracePlaceholders(props.editingSummaryValue)
+  const html = marked.parse(cleaned) as string
+  return postProcessCompiledMarkdown(html, {
+    videoUrl: props.task.video_url || '',
+  })
 })
 
 const showContent = computed(() => {
@@ -515,6 +537,18 @@ watch(() => props.streamingBlocks, () => {
     }
   })
 })
+
+// 进入编辑模式时自动聚焦编辑器
+watch(
+  () => props.isEditingSummary,
+  (editing) => {
+    if (editing) {
+      nextTick(() => {
+        summaryEditorRef.value?.focus()
+      })
+    }
+  },
+)
 </script>
 
 <template>
@@ -542,21 +576,123 @@ watch(() => props.streamingBlocks, () => {
         <div v-show="activeTab === 'summary'">
           <!-- 顶部元信息卡片 -->
           <div class="px-8 pt-8 pb-6 border-b border-slate-200">
-            <TaskMetaCard
-              :task="task"
-              :topic="topic"
-              :summary-word-count="summaryWordCount"
-              :is-editing-topic="isEditingTopic"
-              :editing-topic-value="editingTopicValue"
-              @start-edit-topic="emit('start-edit-topic')"
-              @save-topic="emit('save-topic')"
-              @cancel-edit-topic="emit('cancel-edit-topic')"
-              @update:editing-topic-value="(val) => emit('update:editing-topic-value', val)"
-            />
+            <div class="flex items-start justify-between gap-4">
+              <TaskMetaCard
+                :task="task"
+                :topic="topic"
+                :summary-word-count="summaryWordCount"
+                :is-editing-topic="isEditingTopic"
+                :editing-topic-value="editingTopicValue"
+                @start-edit-topic="emit('start-edit-topic')"
+                @save-topic="emit('save-topic')"
+                @cancel-edit-topic="emit('cancel-edit-topic')"
+                @update:editing-topic-value="(val) => emit('update:editing-topic-value', val)"
+              />
+              <div
+                v-if="isCompleted && task.summary && !isEditingSummary && !isStreamingSummary"
+                class="flex items-center gap-2 shrink-0"
+              >
+                <button
+                  @click="emit('open-local')"
+                  class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-slate-500 hover:text-primary hover:border-blue-200 hover:bg-blue-50 transition-colors text-xs"
+                  title="在本地默认编辑器（如 Typora、VS Code）中打开总结文件"
+                >
+                  <PhArrowSquareOut :size="14" />
+                  <span>本地打开</span>
+                </button>
+                <button
+                  @click="emit('reload-local')"
+                  class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-slate-500 hover:text-primary hover:border-blue-200 hover:bg-blue-50 transition-colors text-xs"
+                  title="读取本地修改后的文件并同步回网页"
+                >
+                  <PhArrowCounterClockwise :size="14" />
+                  <span>重新载入</span>
+                </button>
+                <button
+                  @click="emit('start-edit-summary')"
+                  class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-slate-500 hover:text-primary hover:border-blue-200 hover:bg-blue-50 transition-colors text-xs"
+                  title="编辑总结内容（Markdown）"
+                >
+                  <PhPencilSimple :size="14" />
+                  <span>编辑总结</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 编辑总结模式（双栏：源码 + 实时预览） -->
+          <div v-if="isEditingSummary" class="px-8 py-6">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-semibold text-slate-600">编辑总结内容</h3>
+              <div class="flex items-center gap-2">
+                <button
+                  @click="emit('open-local')"
+                  class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-blue-50 hover:text-primary hover:border-blue-200 transition-colors text-sm"
+                  title="在本地默认编辑器（如 Typora、VS Code）中打开总结文件"
+                >
+                  <PhArrowSquareOut :size="16" />
+                  本地打开
+                </button>
+                <button
+                  @click="emit('reload-local')"
+                  class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-blue-50 hover:text-primary hover:border-blue-200 transition-colors text-sm"
+                  title="读取本地修改后的文件并同步回编辑框与网页"
+                >
+                  <PhArrowCounterClockwise :size="16" />
+                  重新载入
+                </button>
+                <button
+                  @click="emit('cancel-edit-summary')"
+                  class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors text-sm"
+                >
+                  <PhX :size="16" />
+                  取消
+                </button>
+                <button
+                  @click="emit('save-summary')"
+                  :disabled="isSavingSummary"
+                  class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors text-sm font-medium"
+                >
+                  <PhCheck :size="16" />
+                  {{ isSavingSummary ? '保存中...' : '保存' }}
+                </button>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <!-- 左栏：Markdown 源码编辑 -->
+              <div class="flex flex-col rounded-xl border border-slate-200 overflow-hidden min-h-[60vh]">
+                <div class="px-3 py-2 bg-slate-100 border-b border-slate-200 text-xs font-medium text-slate-500">
+                  Markdown 源码
+                </div>
+                <textarea
+                  ref="summaryEditorRef"
+                  :value="editingSummaryValue"
+                  @input="emit('update:editing-summary-value', ($event.target as HTMLTextAreaElement).value)"
+                  class="flex-1 w-full min-h-[55vh] p-4 outline-none font-mono text-sm leading-relaxed bg-white custom-scrollbar resize-none"
+                  placeholder="在此编辑总结内容..."
+                ></textarea>
+              </div>
+              <!-- 右栏：实时预览 -->
+              <div class="flex flex-col rounded-xl border border-slate-200 overflow-hidden min-h-[60vh]">
+                <div class="px-3 py-2 bg-slate-100 border-b border-slate-200 text-xs font-medium text-slate-500">
+                  实时预览
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                  <div
+                    v-if="editingPreviewHtml"
+                    class="prose prose-sm md:prose-base prose-slate prose-headings:font-bold prose-a:text-blue-600 hover:prose-a:underline prose-img:rounded-xl max-w-none ss-shared-prose markdown-theme-container"
+                    :data-theme="currentThemeId"
+                    v-html="editingPreviewHtml"
+                  ></div>
+                  <p v-else class="text-slate-400 italic text-sm">预览为空</p>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- 总结内容 - 添加主题容器类 -->
           <article
+            v-else
             ref="summaryArticleRef"
             class="prose prose-sm md:prose-base prose-slate prose-headings:font-bold prose-a:text-blue-600 hover:prose-a:underline prose-img:rounded-xl max-w-none px-8 py-8 ss-shared-prose markdown-theme-container"
             :data-theme="currentThemeId"

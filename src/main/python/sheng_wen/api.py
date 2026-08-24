@@ -1,8 +1,10 @@
 import os
+import sys
 import asyncio
 import json
 import glob
 import ipaddress
+import subprocess
 import yt_dlp
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Request
 from fastapi import Form
@@ -24,7 +26,9 @@ from .transcriber.settings_manager import TranscriptionSettingsManager
 from .transcriber.transcriber import ModelLoadError
 from .utils.media import (
     SUPPORTED_MEDIA_EXTENSIONS,
+    SUPPORTED_UPLOAD_EXTENSIONS,
     build_transcriber_payload,
+    is_subtitle_text_file,
 )
 from .downloader.bilibili_author_resolver import (
     resolve_bilibili_author,
@@ -117,6 +121,7 @@ class LocalPathTaskCreate(BaseModel):
 
 class TaskUpdate(BaseModel):
     topic: Optional[str] = None
+    summary: Optional[str] = None
 
 class Task(BaseModel):
     id: str
@@ -605,10 +610,12 @@ async def get_file_upload_worker():
     from .downloader.file_upload_worker import FileUploadWorker
 
     transcriber_w = await get_transcriber_worker()
+    llm_w = await get_llm_worker()
 
     file_upload_worker = FileUploadWorker(
         name="FileUploadWorker",
-        next_worker=transcriber_w
+        next_worker=transcriber_w,
+        summary_worker=llm_w,
     )
     file_upload_worker.start()
     return file_upload_worker
@@ -787,10 +794,10 @@ async def upload_file(
     # 验证文件类型
     file_ext = os.path.splitext(file.filename)[1].lower() if file.filename else ''
 
-    if file_ext not in SUPPORTED_MEDIA_EXTENSIONS:
+    if file_ext not in SUPPORTED_UPLOAD_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(sorted(SUPPORTED_MEDIA_EXTENSIONS))}"
+            detail=f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(sorted(SUPPORTED_UPLOAD_EXTENSIONS))}"
         )
 
     # 创建任务 ID
@@ -959,10 +966,10 @@ async def upload_local_path(payload: LocalPathTaskCreate, request: Request):
         raise HTTPException(status_code=400, detail=f"文件不存在或不可访问: {local_path}")
 
     file_ext = os.path.splitext(local_path)[1].lower()
-    if file_ext not in SUPPORTED_MEDIA_EXTENSIONS:
+    if file_ext not in SUPPORTED_UPLOAD_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(sorted(SUPPORTED_MEDIA_EXTENSIONS))}"
+            detail=f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(sorted(SUPPORTED_UPLOAD_EXTENSIONS))}"
         )
 
     task_id = str(uuid.uuid4())
@@ -985,6 +992,19 @@ async def upload_local_path(payload: LocalPathTaskCreate, request: Request):
         "summary_meta": None,
     }
     db.save_task(task_id, task_data)
+
+    # 字幕/文稿文件：交给 FileUploadWorker 直接解析为转录文本进入总结，跳过语音识别。
+    if is_subtitle_text_file(local_path):
+        upload_worker = await _resolve_worker_or_raise(get_file_upload_worker, task_id=task_id)
+        await upload_worker.add_task({
+            "task_id": task_id,
+            "file_path": local_path,
+            "filename": os.path.basename(local_path),
+            "summary_mode": resolved_summary_mode,
+            "move_file": False,
+        })
+        await notify_task_update(task_id)
+        return task_data
 
     payload_data = build_transcriber_payload(
         task_id=task_id,
@@ -1191,10 +1211,22 @@ async def get_task(task_id: str):
     _trigger_author_resolution_if_needed(task)
     return task
 
+def _sync_summary_file(task_id: str, content: str) -> None:
+    """将编辑后的总结内容同步写回本地产物文件（temp/{task_id}_summary.md）。"""
+    try:
+        os.makedirs("temp", exist_ok=True)
+        summary_file = os.path.join("temp", f"{task_id}_summary.md")
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"[API] 总结内容已同步到本地文件: {summary_file}")
+    except Exception as e:
+        logger.warning(f"[API] 同步总结文件失败: task_id={task_id}, error={e}")
+
+
 @app.patch("/tasks/{task_id}", response_model=Task)
 async def update_task(task_id: str, task_update: TaskUpdate):
     """
-    更新任务信息 (目前仅支持 topic)
+    更新任务信息 (支持 topic、summary)
     """
     task = db.get_task(task_id)
     if not task:
@@ -1202,11 +1234,93 @@ async def update_task(task_id: str, task_update: TaskUpdate):
 
     updates = task_update.dict(exclude_unset=True)
     if updates:
+        # 总结内容被编辑时，同步写回本地 .md 文件，保持本地产物一致
+        if updates.get("summary") is not None:
+            _sync_summary_file(task_id, updates["summary"])
         from .task_updater import update_and_notify
         updated_task = await update_and_notify(task_id, updates)
         return updated_task
 
     return task
+
+@app.post("/tasks/{task_id}/open-local")
+async def open_task_local(task_id: str, request: Request):
+    """
+    在服务器本地打开该任务的总结 Markdown 文件（使用系统默认编辑器）。
+    仅允许本机 localhost 请求，避免远程触发服务器弹窗。
+    """
+    if not _is_loopback_client(request):
+        raise HTTPException(
+            status_code=403,
+            detail="仅允许本机 localhost 请求使用本地打开功能。"
+        )
+
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.get("summary"):
+        raise HTTPException(status_code=400, detail="该任务暂无总结内容，无法打开本地文件")
+
+    summary_file = os.path.join("temp", f"{task_id}_summary.md")
+    abs_path = os.path.abspath(summary_file)
+
+    # 确保本地产物文件存在且与数据库一致
+    _sync_summary_file(task_id, task["summary"])
+
+    try:
+        if os.name == "nt":
+            # Windows: 用系统默认程序打开（如 Typora、VS Code、记事本等）
+            os.startfile(abs_path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", abs_path])
+        else:
+            subprocess.Popen(["xdg-open", abs_path])
+        logger.info(f"[API] 已请求在本地打开总结文件: {abs_path}")
+    except Exception as e:
+        logger.error(f"[API] 打开本地文件失败: {abs_path}, error={e}")
+        raise HTTPException(status_code=500, detail=f"打开本地文件失败: {e}")
+
+    return {"success": True, "file_path": abs_path}
+
+@app.post("/tasks/{task_id}/reload-local", response_model=Task)
+async def reload_task_local(task_id: str, request: Request):
+    """
+    从本地 temp/{task_id}_summary.md 文件重新载入总结内容并更新数据库。
+    用户在本地编辑器修改文件后，可通过此接口一键同步回网页。
+    仅允许本机 localhost 请求。
+    """
+    if not _is_loopback_client(request):
+        raise HTTPException(
+            status_code=403,
+            detail="仅允许本机 localhost 请求使用本地文件重新载入功能。"
+        )
+
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    summary_file = os.path.join("temp", f"{task_id}_summary.md")
+    if not os.path.exists(summary_file):
+        raise HTTPException(status_code=400, detail="本地总结文件不存在，请先点击「本地打开」生成文件")
+
+    try:
+        with open(summary_file, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        logger.error(f"[API] 读取本地总结文件失败: {summary_file}, error={e}")
+        raise HTTPException(status_code=500, detail=f"读取本地总结文件失败: {e}")
+
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="本地总结文件内容为空")
+
+    # 更新数据库并广播，使网页展示与本地文件保持一致
+    from .task_updater import update_and_notify
+    updated_task = await update_and_notify(task_id, {"summary": content})
+    if not updated_task:
+        raise HTTPException(status_code=500, detail="更新任务失败")
+
+    logger.info(f"[API] 已从本地文件重新载入总结: {os.path.abspath(summary_file)}")
+    return updated_task
 
 @app.post("/tasks/{task_id}/re-summarize", response_model=Task)
 async def re_summarize_task(task_id: str, payload: ReSummarizeRequest | None = None):

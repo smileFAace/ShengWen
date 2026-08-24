@@ -73,6 +73,9 @@ const {
   reSummarize,
   reTranscribe,
   updateTaskTopic,
+  updateTaskSummary,
+  openTaskLocal,
+  reloadTaskLocal,
   updateProfile,
   createProfile,
   deleteProfile,
@@ -114,6 +117,9 @@ const showInfoModal = ref(false)
 const isSettingsModalOpen = ref(false)
 const isEditingTopic = ref(false)
 const editingTopicValue = ref('')
+const isEditingSummary = ref(false)
+const editingSummaryValue = ref('')
+const isSavingSummary = ref(false)
 const isTestingLlm = ref(false)
 const summaryHighlightRequest = ref<{
   taskId: string
@@ -659,11 +665,62 @@ const cancelEditingTopic = () => {
   isEditingTopic.value = false
 }
 
+const startEditingSummary = () => {
+  if (!selectedTask.value?.summary) return
+  editingSummaryValue.value = selectedTask.value.summary
+  isEditingSummary.value = true
+}
+
+const saveSummary = async () => {
+  if (!selectedTask.value || isSavingSummary.value) return
+  isSavingSummary.value = true
+  try {
+    await updateTaskSummary(selectedTask.value.id, editingSummaryValue.value)
+    clearResumeSnapshot()
+    isEditingSummary.value = false
+    success('总结已保存')
+  } catch (e) {
+    // Error handled in composable and shown via toast
+  } finally {
+    isSavingSummary.value = false
+  }
+}
+
+const cancelEditingSummary = () => {
+  isEditingSummary.value = false
+}
+
+const handleOpenTaskLocal = async () => {
+  if (!selectedTask.value) return
+  try {
+    const result = await openTaskLocal(selectedTask.value.id)
+    success(`已在本地打开：${result.file_path}`)
+  } catch (e) {
+    // Error handled in composable and shown via toast
+  }
+}
+
+const handleReloadTaskLocal = async () => {
+  if (!selectedTask.value) return
+  try {
+    const updated = await reloadTaskLocal(selectedTask.value.id)
+    clearResumeSnapshot()
+    // 若正在编辑模式，把载入的内容同步到编辑框
+    if (isEditingSummary.value && updated?.summary != null) {
+      editingSummaryValue.value = updated.summary
+    }
+    success('已从本地文件重新载入总结')
+  } catch (e) {
+    // Error handled in composable and shown via toast
+  }
+}
+
 const handleSelectTask = async (task: Task) => {
   summaryHighlightRequest.value = null
   markdownHeadings.value = []
   activeHeadingId.value = ''
   headingJumpRequest.value = null
+  isEditingSummary.value = false
   await selectTask(task)
   // 如果选中了正在流式输出的任务，拍快照用于无缝显示已有内容
   if (selectedTask.value?.status === 'SUMMARIZING' && selectedTask.value.summary) {
@@ -956,6 +1013,9 @@ watch(
           :topic="topic"
           :is-editing-topic="isEditingTopic"
           :editing-topic-value="editingTopicValue"
+          :is-editing-summary="isEditingSummary"
+          :editing-summary-value="editingSummaryValue"
+          :is-saving-summary="isSavingSummary"
           :is-streaming-summary="isStreamingSummary"
           :streaming-blocks="streamingBlocks"
           :compiled-resume-summary="compiledResumeSummary"
@@ -964,6 +1024,12 @@ watch(
           @save-topic="saveTopic"
           @cancel-edit-topic="cancelEditingTopic"
           @update:editing-topic-value="(val) => editingTopicValue = val"
+          @start-edit-summary="startEditingSummary"
+          @save-summary="saveSummary"
+          @cancel-edit-summary="cancelEditingSummary"
+          @update:editing-summary-value="(val) => editingSummaryValue = val"
+          @open-local="handleOpenTaskLocal"
+          @reload-local="handleReloadTaskLocal"
           @update-markdown-headings="handleMarkdownHeadingsUpdate"
           @update-active-heading-id="handleActiveHeadingIdUpdate"
         />

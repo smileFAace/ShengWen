@@ -1208,18 +1208,16 @@ watch(() => props.summarizationSettings, (settings) => {
                   @keydown.enter.prevent="handleVideoUrlEnter"
                 >
                 <button
-                  v-if="!props.isLocalClient"
                   @click="triggerFileUpload"
                   class="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-primary hover:bg-blue-50 rounded-lg transition-colors"
-                  title="上传文件"
+                  title="上传音视频或字幕/文稿文件（.srt/.vtt/.ass/.ssa/.txt）"
                 >
                   <PhUpload :size="18" />
                 </button>
                 <input
-                  v-if="!props.isLocalClient"
                   ref="fileInput"
                   type="file"
-                  accept="video/*,audio/*"
+                  accept="video/*,audio/*,.srt,.vtt,.ass,.ssa,.txt"
                   class="hidden"
                   @change="handleFileChange"
                 >
@@ -1272,7 +1270,7 @@ watch(() => props.summarizationSettings, (settings) => {
                 </button>
               </div>
 
-              <div v-if="!props.isLocalClient && selectedFile" class="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-sm">
+              <div v-if="selectedFile" class="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-sm">
                 <div class="flex-1 min-w-0">
                   <p class="font-medium text-slate-700 truncate">{{ selectedFile.name }}</p>
                   <p class="text-xs text-slate-500">{{ formatFileSize(selectedFile.size) }}</p>
@@ -1285,6 +1283,10 @@ watch(() => props.summarizationSettings, (settings) => {
                   <PhX :size="16" />
                 </button>
               </div>
+
+              <p class="px-1 text-[11px] leading-4 text-slate-400">
+                支持音视频（.mp4/.mp3 等）或字幕/文稿（.srt/.vtt/.ass/.ssa/.txt）
+              </p>
 
               <div class="relative">
                 <div class="relative flex bg-gray-100 p-1 rounded-2xl transition-all duration-200 overflow-visible">
@@ -1323,7 +1325,7 @@ watch(() => props.summarizationSettings, (settings) => {
 
               <button
                 @click="handleSubmitAction"
-                :disabled="props.isPrewarming || (!isSubmitting && (!videoUrl && (!props.isLocalClient ? !selectedFile : !localFilePath)))"
+                :disabled="props.isPrewarming || (!isSubmitting && !videoUrl && !selectedFile && !localFilePath)"
                 class="w-full bg-primary hover:bg-secondary text-white py-2.5 rounded-xl font-semibold transition-all shadow-sm shadow-blue-100 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
               >
                 <PhSpinner v-if="props.isPrewarming" :size="18" class="animate-spin" />
