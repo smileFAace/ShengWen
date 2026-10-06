@@ -124,61 +124,48 @@ def _detect_cuda_support() -> dict[str, Any]:
 
         torch_installed = True
         torch_cuda_built = bool(getattr(torch.version, "cuda", None))
-        cuda_available = bool(torch.cuda.is_available())
+    except Exception:
+        pass
 
-        if cuda_available:
-            try:
-                import ctranslate2  # type: ignore
+    if not has_nvidia_gpu:
+        reason = "no_gpu"
+        message = "未检测到 NVIDIA 显卡（或驱动未正确安装）。"
+    else:
+        try:
+            import ctranslate2  # type: ignore
 
-                ctranslate2_installed = True
-                ctranslate2_cuda_device_count = int(ctranslate2.get_cuda_device_count())
-                if ctranslate2_cuda_device_count > 0:
-                    reason = "ok"
-                    message = f"CUDA 可用（CTranslate2 检测到 {ctranslate2_cuda_device_count} 张 GPU），可使用 GPU 转录。"
-                else:
-                    cuda_available = False
-                    reason = "ct2_no_cuda_device"
-                    message = "检测到 PyTorch CUDA 可用，但 CTranslate2 未检测到可用 CUDA 设备。建议更新显卡驱动，或先切回 CPU。"
-            except Exception as e:
-                cuda_available = False
-                error_text = str(e)
-                if isinstance(e, ModuleNotFoundError):
-                    reason = "ct2_missing"
+            ctranslate2_installed = True
+            ctranslate2_cuda_device_count = int(ctranslate2.get_cuda_device_count())
+            if ctranslate2_cuda_device_count > 0:
+                cuda_available = True
+                reason = "ok"
+                message = f"CUDA 可用（CTranslate2 检测到 {ctranslate2_cuda_device_count} 张 GPU），可使用 GPU 转录。"
+            else:
+                reason = "ct2_no_cuda_device"
+                message = "检测到 NVIDIA 显卡，但 CTranslate2 未检测到可用 CUDA 设备。建议更新显卡驱动，或先切回 CPU。"
+        except Exception as e:
+            error_text = str(e)
+            if isinstance(e, ModuleNotFoundError):
+                reason = "ct2_missing"
+                message = (
+                    "检测到 NVIDIA 显卡，但缺少 CTranslate2（fast-whisper 依赖）。"
+                    "\n可处理步骤：执行 `pip install ctranslate2` 后重启应用。"
+                )
+            else:
+                missing_dll, cuda_major = _extract_missing_cuda_runtime_dll(error_text)
+                reason = "ct2_cuda_runtime_unavailable"
+                if missing_dll:
                     message = (
-                        "检测到 CUDA 环境，但缺少 CTranslate2（fast-whisper 依赖）。"
-                        "\n可处理步骤：执行 `pip install ctranslate2` 后重启应用。"
+                        "检测到 NVIDIA 显卡，但 fast-whisper CUDA 运行时不可用。"
+                        f"\n缺少运行库：{missing_dll}"
+                        f"\n{_build_cuda_fix_message(missing_dll, cuda_major)}"
                     )
                 else:
-                    missing_dll, cuda_major = _extract_missing_cuda_runtime_dll(error_text)
-                    reason = "ct2_cuda_runtime_unavailable"
-                    if missing_dll:
-                        message = (
-                            "检测到 CUDA 环境，但 fast-whisper CUDA 运行时不可用。"
-                            f"\n缺少运行库：{missing_dll}"
-                            f"\n{_build_cuda_fix_message(missing_dll, cuda_major)}"
-                        )
-                    else:
-                        message = (
-                            "检测到 CUDA 环境，但 fast-whisper CUDA 运行时不可用。"
-                            f"\n原始错误：{error_text}"
-                            "\n可处理步骤：先切换到 CPU；随后检查 CUDA Runtime 与驱动版本，并重启后重试。"
-                        )
-        elif not has_nvidia_gpu:
-            reason = "no_gpu"
-            message = "未检测到 NVIDIA 显卡（或驱动未正确安装）。"
-        elif not torch_cuda_built:
-            reason = "torch_cpu_only"
-            message = "检测到 NVIDIA 显卡，但当前 PyTorch 为 CPU 版本（未启用 CUDA）。"
-        else:
-            reason = "cuda_runtime_unavailable"
-            message = "检测到 NVIDIA 显卡，且 PyTorch 支持 CUDA，但当前 CUDA 运行时不可用（可能是驱动/运行库问题）。"
-    except Exception:
-        if has_nvidia_gpu:
-            reason = "torch_missing"
-            message = "检测到 NVIDIA 显卡，但未安装 PyTorch（或环境中不可导入）。"
-        else:
-            reason = "no_gpu"
-            message = "未检测到 NVIDIA 显卡（或驱动未正确安装）。"
+                    message = (
+                        "检测到 NVIDIA 显卡，但 fast-whisper CUDA 运行时不可用。"
+                        f"\n原始错误：{error_text}"
+                        "\n可处理步骤：先切换到 CPU；随后检查 CUDA Runtime 与驱动版本，并重启后重试。"
+                    )
 
     return {
         "cuda_available": cuda_available,
