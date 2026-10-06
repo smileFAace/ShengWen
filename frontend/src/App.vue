@@ -830,6 +830,7 @@ watch(
     <!-- 设置弹窗 -->
     <SettingsModal
       :isOpen="isSettingsModalOpen"
+      :isPrewarming="isPrewarming"
       :llmProviders="llmProviders"
       :llmSettings="llmSettings"
       :activeProfileId="activeProfileId"
