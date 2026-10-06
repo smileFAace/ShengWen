@@ -139,8 +139,8 @@ REM 创建/复用虚拟环境
 echo 📦 步骤 1/5: 准备虚拟环境...
 set "REBUILD_VENV="
 if exist "%VENV_DIR%\pyvenv.cfg" (
-    for /f %%i in ('"%PYTHON_EXE%" %PYTHON_ARGS% -c "import sys; print(sys.version_info[0])"') do set "TARGET_PYTHON_MAJOR=%%i"
-    for /f %%i in ('"%PYTHON_EXE%" %PYTHON_ARGS% -c "import sys; print(sys.version_info[1])"') do set "TARGET_PYTHON_MINOR=%%i"
+    set "TARGET_PYTHON_MAJOR=!PYTHON_VERSION_MAJOR!"
+    set "TARGET_PYTHON_MINOR=!PYTHON_VERSION_MINOR!"
     for /f "tokens=2 delims== " %%i in ('findstr /b /c:"version =" "%VENV_DIR%\pyvenv.cfg"') do set "VENV_VERSION_RAW=%%i"
     for /f "tokens=1,2 delims=." %%i in ("!VENV_VERSION_RAW!") do (
         set "VENV_MAJOR=%%i"
